@@ -1,0 +1,5 @@
+Probé todos los componentes electrónicos junto con el programador, validando el funcionamiento completo del circuito.
+Diagnosticamos y resolvimos el conflicto de direcciones I2C entre los sensores VL53L0X y el sensor de color (secuencia XSHUT), confirmando que los 4 dispositivos ahora responden correctamente en direcciones separadas.
+Apoyé en el modelado e impresión 3D de 2 piezas: un soporte para el portapilas y un soporte para los sensores de distancia.
+LINK:
+https://drive.google.com/file/d/1OFQHqrSfA5JTivid8cqVjVhYVQVOpLvt/view?usp=drive_link
