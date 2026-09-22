@@ -26,9 +26,9 @@ Durante las primeras pruebas de movimiento con los controladores TB6612FNG, dos 
 
 ### Análisis y solución
 
-1. **Verificación eléctrica**: Utilicé un multímetro para medir el voltaje de salida en las terminales $A01/A02$ y $B01/B02$ del driver, confirmando que la caída de tensión no provenía del regulador de potencia, sino de una señal lógica flotante.
+1. **Verificación eléctrica**: Utilicé un multímetro para medir el voltaje de salida en las terminales A01/A02 y B01/B02 del driver, confirmando que la caída de tensión no provenía del regulador de potencia, sino de una señal lógica flotante.
 2. **Mapeo de pines y lógica directa**: Revisé la asignación de pines en el archivo `test/motor_test.cpp`, re-mapeando las salidas PWM y las líneas de dirección (`IN1`/`IN2`) hacia pines con soporte de temporizador dedicado en el Arduino Mega 2560.
-3. **Validación**: Con un script modular aislado en PlatformIO, verifiqué el comportamiento individual de cada puente H en ambos sentidos a diferentes ciclos de trabajo ($0–255$).
+3. **Validación**: Con un script modular aislado en PlatformIO, verifiqué el comportamiento individual de cada puente H en ambos sentidos a diferentes ciclos de trabajo (0–255).
 
 ---
 
