@@ -1,19 +1,21 @@
-# PlatformIO
+# PlatformIO: Archivos de compilación y librerías descargadas
 .pio/
 .pioenvs/
 .piolibdeps/
 
-# VS Code
-.vscode/.browse.c_cpp.db*
+# VS Code: Configuraciones locales autogeneradas por PlatformIO
 .vscode/c_cpp_properties.json
 .vscode/launch.json
+.vscode/.browse.c_cpp.db*
 .vscode/ipch/
-.vscode/compile_commands.json
 
-# Sistema Operativo y Temporales
+# Archivos binarios y temporales
+*.elf
+*.hex
+*.bin
+*.o
+*.a
+
+# Archivos del sistema operativo
 .DS_Store
 Thumbs.db
-*.hex
-*.elf
-*.bin
-*.log
