@@ -1,122 +1,106 @@
 # Hardware test plan
 
 This directory contains hardware test skeletons for the robot subsystem validation flow.
-
 Recommended order:
-1. Blink
-2. Digital pins
-3. Motor 1..4 and drivetrain
-4. Encoder checks
-5. PID tuning
-6. IMU validation
-7. VL53L0X checks
-8. TCS34725 classification
-9. QTR-8A detection
-10. Servo and gripper
-11. OLED smoke test
-12. Full integration test
+Blink
+Digital pins
+Motor 1..4 and drivetrain
+Encoder checks
+PID tuning
+IMU validation
+VL53L0X checks
+TCS34725 classification
+QTR-8A detection
+Servo and gripper
+OLED smoke test
+Full integration test
 
-# Bitácora de desarrollo y resolución de problemas
+Development log and troubleshooting
 
-## 1. Módulo de actuadores y motores DC (TB6612FNG)
+1. Actuator module and DC motors (TB6612FNG)
 
-### Problema detectado
+Problem detected
 
-Durante las primeras pruebas de movimiento con los controladores TB6612FNG, dos de los cuatro motores (específicamente Motor 2 y Motor 3) no respondían a los comandos PWM enviando señales de dirección correctas, o su comportamiento era intermitente al cambiar el sentido de giro.
+During the first motion tests with the TB6612FNG drivers, two of the four motors (specifically Motor 2 and Motor 3) did not respond to PWM commands sending correct direction signals, or their behavior was intermittent when changing the rotation direction.
 
-### Análisis y solución
+Analysis and solution
 
-1. **Verificación eléctrica**: Utilicé un multímetro para medir el voltaje de salida en las terminales A01/A02 y B01/B02 del driver, confirmando que la caída de tensión no provenía del regulador de potencia, sino de una señal lógica flotante.
-2. **Mapeo de pines y lógica directa**: Revisé la asignación de pines en el archivo `test/motor_test.cpp`, re-mapeando las salidas PWM y las líneas de dirección (`IN1`/`IN2`) hacia pines con soporte de temporizador dedicado en el Arduino Mega 2560.
-3. **Validación**: Con un script modular aislado en PlatformIO, verifiqué el comportamiento individual de cada puente H en ambos sentidos a diferentes ciclos de trabajo (0–255).
+Electrical verification: I used a multimeter to measure the output voltage at the A01/A02 and B01/B02 terminals of the driver, confirming that the voltage drop did not come from the power regulator, but from a floating logic signal.
+Pin mapping and direct logic: I reviewed the pin assignment in the test/motor_test.cpp file, re-mapping the PWM outputs and direction lines (IN1/IN2) to pins with dedicated timer support on the Arduino Mega 2560.
+Validation: With an isolated modular script in PlatformIO, I verified the individual behavior of each H-bridge in both directions at different duty cycles (0–255).
 
----
+2. Odometry and interrupt diagnostics in quadrature encoders
 
-## 2. Odometría y diagnóstico de interrupciones en encoders de cuadratura
+Problem detected
 
-### Problema detectado
+When implementing the speed and pulse reading of the four quadrature encoders, motors M1, M2, and M3 registered precise counts through pin change interrupts (Pin Change Interrupts - PCINT). However, Motor 4 did not register any pulses when turning its axis.
 
-Al implementar la lectura de velocidad e impulsos de los cuatro encoders de cuadratura, los motores M1, M2 y M3 registraban conteos precisos mediante interrupciones por cambio de pin (*Pin Change Interrupts - PCINT*). Sin embargo, el Motor 4 no registraba ningún impulso al girar su eje.
+ATmega2560 architecture analysis
 
-### Análisis de arquitectura del ATmega2560
+When auditing the physical mapping of the pins assigned to Motor 4 (D16 and D17), I identified that they belong to Port H (PH0 and PH1) of the ATmega2560 microcontroller. Unlike ports B and J, Port H lacks hardware for PCINT vectors (PCINTx). Attempting to read these pins by polling inside the loop() function caused a massive loss of ticks when the motor spun at high revolutions.
 
-Al auditar el mapeo físico de los pines asignados al Motor 4 (`D16` y `D17`), identificué que pertenecen al **Puerto H (`PH0` y `PH1`)** del microcontrolador ATmega2560. A diferencia de los puertos B y J, el Puerto H **carece de hardware para vectores PCINT (`PCINTx`)**. Intentar leer estos pines por *polling* dentro de la función `loop()` causaba una pérdida masiva de *ticks* cuando el motor giraba a revoluciones altas.
+Implemented solution
 
-### Solución implementada
+Physical re-routing: I reassigned the encoder reading lines of Motor 4 from pins D16/D17 to pins D18 (INT3) and D19 (INT2).
+Leveraging native interrupts: I configured the reading using attachInterrupt(digitalPinToInterrupt(18), ISR_M4, RISING), utilizing the dedicated hardware interrupts of the chip instead of the port register.
+Result: I achieved a deterministic high-frequency reading across all four odometry channels with zero pulse loss.
 
-1. **Re-enrutamiento físico**: Reasigné las líneas de lectura del encoder del Motor 4 desde los pines `D16/D17` hacia los pines **`D18` (INT3)** y **`D19` (INT2)**.
-2. **Aprovechamiento de interrupciones nativas**: Configuré la lectura mediante `attachInterrupt(digitalPinToInterrupt(18), ISR_M4, RISING)`, utilizando las interrupciones hardware dedicadas del chip en lugar del registro de puerto.
-3. **Resultado**: Logré una lectura determinista a alta frecuencia en los cuatro canales de odometría con cero pérdida de pulsos.
+3. Line follower module handling (QTR-8A)
 
----
+Problem detected
 
-## 3. Manejo del módulo seguidor de línea (QTR-8A)
+When updating the libraries to version QTRSensors v4.x from Pololu, the legacy syntax used in initial testing yielded compilation errors due to obsolete constants like QTR_EMITTERS_ON.
 
-### Problema detectado
+Implemented solution
 
-Al actualizar las librerías a la versión `QTRSensors` v4.x de Pololu, la sintaxis heredada utilizada en las pruebas iniciales arrojaba errores de compilación por constantes obsoletas como `QTR_EMITTERS_ON`.
+Script modernization: I rewrote the test module test/qtr_test.cpp adapting it to the v4.x API.
+Analog configuration: I explicitly defined the reading array with qtr.setTypeAnalog() and the mapping of the 8 analog channels of the Arduino Mega (A0 to A7).
+Read optimization: I simplified the capture function to qtr.read(sensorValues), isolating raw analog readings for subsequent normalization using qtr.calibrate().
 
-### Solución implementada
+4. Address conflict on the I2C bus (3x VL53L0X + TCS34725)
 
-1. **Modernización del script**: Reescribí el módulo de prueba `test/qtr_test.cpp` adaptándolo a la API v4.x.
-2. **Configuración analógica**: Definí explícitamente el arreglo de lectura con `qtr.setTypeAnalog()` y el mapeo de los 8 canales analógicos del Arduino Mega (`A0` a `A7`).
-3. **Optimización de lectura**: Simplifiqué la función de captura a `qtr.read(sensorValues)`, aislando las lecturas analógicas brutas para su posterior normalización mediante `qtr.calibrate()`.
+The technical problem
 
----
+The robot integrates three Time-of-Flight distance sensors (VL53L0X: Front, Right, Left) and an RGB color sensor (TCS34725). Upon performing an initial I2C scan, the terminal only detected a device at address 0x29.
+Upon reviewing the component datasheets, I discovered that both the TCS34725 and the three VL53L0X sensors come factory-configured with the same default I2C address (0x29). With all of them powered simultaneously on the bus (SDA D20 / SCL D21), transmissions collided and the bus became completely locked.
 
-## 4. Conflicto de direcciones en el bus I2C (3x VL53L0X + TCS34725)
+Failed attempts and deep diagnosis
 
-### El problema técnico
+Simple software re-addressing: I attempted to execute the standard lox.begin(NEW_ADDRESS) routine by powering on the XSHUT pins one by one. However, the distance sensors kept failing with the message [FAIL].
+Discovery of the conflict with the color sensor: Upon physically disconnecting the TCS34725 color sensor from the bus, all three VL53L0X distance sensors successfully changed their addresses to 0x30, 0x31, and 0x32 without any issues.
+Root cause:
+The Adafruit_VL53L0X library sends broadcast commands to address 0x29 during its initialization to order the address change.
+Since the TCS34725 **has no XSHUT pin** to turn it off via software and its integrated pull-up resistors kept the bus impedance low, the color sensor responded and corrupted the packets intended for the VL53L0X sensors.
 
-El robot integra tres sensores de distancia Time-of-Flight (VL53L0X: Frontal, Derecho, Izquierdo) y un sensor de color RGB (TCS34725). Al realizar un escaneo I2C inicial, la terminal solo detectaba un dispositivo en la dirección `0x29`.
+Dynamic power control via software
 
-Al revisar las hojas de datos de los componentes, descubrí que **tanto el TCS34725 como los tres sensores VL53L0X vienen configurados de fábrica con la misma dirección I2C por defecto (`0x29`)**. Al estar todos energizados simultáneamente en el bus (SDA `D20` / SCL `D21`), las transmisiones colisionaban y el bus quedaba completamente bloqueado.
+Since it was not possible to shut down the TCS34725 via software nor change its fixed factory address (0x29), I designed a power control and staged initialization strategy:
+Hardware modification: I disconnected the power pin (VIN/VCC) of the TCS34725 sensor from the constant 5V line and connected it directly to digital pin D28 of the Arduino Mega.
+XSHUT lines connection: I connected the reset lines of the VL53L0Xs to independent digital pins:
+Front → D24
+Right → D22
+Left → D26
+**Sequential startup algorithm in setup()**:
+Step A: I set pin D28 to LOW state (0V, completely de-energizing the TCS34725) and set pins D22, D24, and D26 to LOW (holding all three VL53L0Xs in reset).
+Step B: I set pin D24 to HIGH. I initialized the sensor at 0x29 and immediately assigned it the new address 0x30.
+Step C: I set pin D22 to HIGH. I initialized the sensor at 0x29 and assigned it the address 0x31.
+Step D: I set pin D26 to HIGH. I initialized the sensor at 0x29 and assigned it the address 0x32.
+Step E: Having moved all three distance sensors to private addresses (0x30, 0x31, 0x32), address 0x29 was 100% free. At that moment, I toggled pin D28 to HIGH (5V) to power the TCS34725 and called tcs.begin(0x29, &Wire).
 
-### Intentos fallidos y diagnóstico profundo
+Result
 
-1. **Re-direccionamiento por software simple**: Intenté ejecutar la rutina estándar `lox.begin(NUEVA_DIRECCION)` encendiendo los pines `XSHUT` uno a uno. Sin embargo, los sensores de distancia seguían fallando con el mensaje `[FALLO]`.
-2. **Descubrimiento del conflicto con el sensor de color**: Al desconectar físicamente el sensor de color TCS34725 del bus, los tres sensores de distancia VL53L0X lograban cambiar de dirección a `0x30`, `0x31` y `0x32` sin ningún problema.
-3. **Causa raíz**:
-* La librería `Adafruit_VL53L0X` envía comandos broadcast a la dirección `0x29` durante su inicialización para ordenar el cambio de dirección.
-* Como el TCS34725 **no tiene pin `XSHUT**` para apagarlo por software y sus resistencias de *pull-up* integradas mantenían la impedancia del bus baja, el sensor de color respondía y corrompía los paquetes que iban dirigidos a los VL53L0X.
+The 4 I2C sensors coexist stably on the same data bus, allowing simultaneous real-time readings of distance (in mm) and color (RGB values) without any type of collision.
 
+5. Development environment management and project structure (PlatformIO)
 
+Challenge
 
-### Control de alimentación dinámica por software
+Testing multiple peripherals individually without causing main function redefinition conflicts (setup() and loop()) in C/C++ or cluttering the main src/main.cpp folder.
 
-Dado que no era posible apagar el TCS34725 por software ni cambiar su dirección fija de fábrica (`0x29`), diseñé una estrategia de control de energía e inicialización por etapas:
+Solution
 
-1. **Modificación de hardware**: Desconecté el pin de alimentación (`VIN/VCC`) del sensor TCS34725 de la línea constante de 5V y lo conecté directamente al pin digital **`D28`** del Arduino Mega.
-2. **Conexión de líneas XSHUT**: Conecté las líneas de reset de los VL53L0X a pines digitales independientes:
-* Frontal $\rightarrow$ **`D24`**
-* Derecho $\rightarrow$ **`D22`**
-* Izquierdo $\rightarrow$ **`D26`**
-
-
-3. **Algoritmo de arranque secuencial en `setup()**`:
-* **Paso A**: Puse en estado `LOW` el pin `D28` ($0\text{V}$, desenergizando por completo el TCS34725) y puse en `LOW` los pines `D22`, `D24` y `D26` (manteniendo los tres VL53L0X en reset).
-* **Paso B**: Puse en `HIGH` el pin `D24`. Inicialicé el sensor en `0x29` y de inmediato le asigné la nueva dirección **`0x30`**.
-* **Paso C**: Puse en `HIGH` el pin `D22`. Inicialicé el sensor en `0x29` y le asigné la dirección **`0x31`**.
-* **Paso D**: Puse en `HIGH` el pin `D26`. Inicialicé el sensor en `0x29` y le asigné la dirección **`0x32`**.
-* **Paso E**: Habiendo movido los tres sensores de distancia a direcciones privadas (`0x30`, `0x31`, `0x32`), la dirección `0x29` quedó 100% libre. En ese momento, conmuté el pin `D28` a `HIGH` ($5\text{V}$) para energizar el TCS34725 y llamé a `tcs.begin(0x29, &Wire)`.
-
-
-
-### Resultado
-
-Los 4 sensores I2C conviven de forma estable en el mismo bus de datos, permitiendo lecturas simultáneas y en tiempo real de distancia (en mm) y color (valores RGB) sin ningún tipo de colisión.
-
----
-
-## 5. Gestión del entorno de desarrollo y estructura de proyecto (PlatformIO)
-
-### Desafío
-
-Probar múltiples periféricos de forma individual sin generar conflictos de redefinición de funciones principales (`setup()` y `loop()`) en C/C++ ni ensuciar la carpeta principal `src/main.cpp`.
-
-### Solución
-
-Aproveché la directiva **`build_src_filter`** en el archivo de configuración `platformio.ini`:
-
+I took advantage of the build_src_filter directive in the platformio.ini configuration file:
+I created a test/ folder where I stored each diagnostic script in isolation (qtr_test.cpp, vl53_color_test.cpp, etc.).
+I used the inclusion and exclusion syntax (+<../test/current_script.cpp> -<main.cpp>) to switch tests in a matter of seconds, drastically accelerating the development and compilation process prior to final integration.
 * Creé una carpeta `test/` donde almacené cada script de diagnóstico de forma aislada (`qtr_test.cpp`, `vl53_color_test.cpp`, etc.).
 * Utilicé la sintaxis de inclusión y exclusión (`+<../test/script_actual.cpp> -<main.cpp>`) para cambiar de prueba en cuestión de segundos, acelerando drásticamente el proceso de desarrollo y compilación antes de la integración final.
