@@ -19,16 +19,16 @@ public:
   static EncoderManager* instance_;
   static void processPortB(uint8_t portState);
   static void processPortJ(uint8_t portState);
-  static void processPortH(uint8_t portState);
   static void processQuadrature(uint8_t motor, uint8_t state);
+  static void handleMotor4Interrupt();
 
 private:
   static volatile uint8_t previousPortB_;
   static volatile uint8_t previousPortJ_;
-  static volatile uint8_t previousPortH_;
-
-  int32_t previousTicks[4];
-  uint32_t previousMicros[4];
+  static volatile uint8_t previousState_[4];
+  int32_t sampleTicks_[4];
+  float rpm_[4];
+  uint32_t lastSampleMs_;
 };
 
 #endif

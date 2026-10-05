@@ -26,10 +26,13 @@ private:
   float lastMeasurement_;
   float integral_;
   float output_;
+  float lastDerivative_;
   float minOutput_;
   float maxOutput_;
   uint32_t lastUpdateMs_;
   uint16_t sampleTimeMs_;
+  float integralLimit_;
+  float deadband_;
   bool enabled_;
 };
 

@@ -3,13 +3,11 @@
 
 #include "config.h"
 
+#ifndef ACTIVE_TRACK
 #define ACTIVE_TRACK robot::ActiveTrack::PISTA_B
-#define COMPETITION_MODE false
+#endif
+#ifndef START_MODE
 #define START_MODE robot::StartMode::START_FROM_BEGINNING
-#define ENABLE_ARUCO false
-#define ENABLE_RETURN_BONUS false
-#define ENABLE_VERBOSE_LOGGING false
-#define ENABLE_DISPLAY true
-#define ENABLE_SAFETY_LIMITS true
+#endif
 
 #endif

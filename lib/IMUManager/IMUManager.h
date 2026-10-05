@@ -16,6 +16,7 @@ public:
   float getPitch() const;
   float getRoll() const;
   float getYawRate() const;
+  bool healthy() const;
 
 private:
   Adafruit_MPU6050 mpu_;
@@ -26,7 +27,9 @@ private:
   float pitchDeg_;
   float rollDeg_;
   float yawRateDegPerSec_;
-  float yawOffset_;
+  float gyroBiasZ_;
+  uint32_t lastUpdateUs_;
+  bool initialized_;
 };
 
 #endif

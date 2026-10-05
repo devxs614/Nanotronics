@@ -13,10 +13,16 @@ public:
   void close();
   void hold();
   void setAngle(int angle);
+  void calibrateGripper();
+  void testGripper();
+  int angle() const;
 
 private:
   Servo servo_;
   int angle_;
+  uint8_t testStep_;
+  uint32_t testStepStartedMs_;
+  bool testActive_;
 };
 
 #endif

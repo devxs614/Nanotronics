@@ -12,6 +12,9 @@ public:
   uint16_t readFront() const;
   uint16_t readLeft() const;
   uint16_t readRight() const;
+  bool frontHealthy() const;
+  bool leftHealthy() const;
+  bool rightHealthy() const;
 
 private:
   Adafruit_VL53L0X frontSensor_;
@@ -21,7 +24,9 @@ private:
   uint16_t frontMm_;
   uint16_t leftMm_;
   uint16_t rightMm_;
-  bool initialized_;
+  bool frontReady_;
+  bool leftReady_;
+  bool rightReady_;
 };
 
 #endif

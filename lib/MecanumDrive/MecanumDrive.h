@@ -4,11 +4,15 @@
 #include <Arduino.h>
 #include "config.h"
 #include "MotorController.h"
+#include "EncoderManager.h"
+#include "PIDController.h"
 
 class MecanumDrive {
 public:
   void begin(MotorController* motorController);
+  void begin(MotorController* motorController, EncoderManager* encoderManager);
   void drive(float vx, float vy, float omega);
+  void update();
   void driveForward(float speed);
   void driveBackward(float speed);
   void strafeLeft(float speed);
@@ -22,7 +26,11 @@ public:
 
 private:
   MotorController* motorController_;
+  EncoderManager* encoderManager_;
+  PIDController wheelPid_[4];
   float wheelSigns_[4];
+  float targetWheelSpeed_[4];
+  uint32_t lastPidUpdateMs_;
 };
 
 #endif

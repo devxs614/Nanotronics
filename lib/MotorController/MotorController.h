@@ -27,8 +27,10 @@ public:
 
 private:
   uint8_t motorPins_[4][3];
+  uint32_t lastUpdateUs_;
 
   int16_t clampPWM(int16_t value) const;
+  bool motorInverted(uint8_t motor) const;
 };
 
 #endif
