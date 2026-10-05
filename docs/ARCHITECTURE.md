@@ -11,7 +11,7 @@ The system is divided into clear subsystems so that each module is testable inde
 
 ## Hardware responsibility map
 - `MotorController`: TB6612 outputs and acceleration limits
-- `EncoderManager`: counts wheel ticks and computes speed
+- `EncoderManager`: quadrature counting and speed estimation; PCINT for D10-D15 and native external interrupts for D18-D19
 - `PIDController`: wheel speed regulation and heading loop
 - `MecanumDrive`: kinematic mapping between robot frame and wheel commands
 - `IMUManager`: yaw, pitch, roll and heading integration
@@ -23,6 +23,10 @@ The system is divided into clear subsystems so that each module is testable inde
 - `RobotStateMachine`: high-level mode execution
 - `MazeNavigator`, `BallHandler`, `TileNavigator`, `LineAvoidanceController`: track-specific logic
 - `RecoveryManager` and `CheckpointManager`: reset-safe execution management
+
+The three VL53L0X modules are initialized one at a time with XSHUT so their default I2C addresses do not collide. D28 switches TCS34725 power off during the VL53 address assignment, then the color module restores power. The optional ArUco UART uses Serial2 (D16/D17), not Serial1, because D18/D19 are encoder inputs.
+
+`src/config.h` is the single source of truth for hardware pins and physical parameters. `lib/constantes/constantes.h` only forwards to it.
 
 ## Why this structure
 This keeps each subsystem reasonably small, simplifies debugging, allows isolated tests, and avoids dead-end monolithic sketches. It is suitable for engineering students to review and update.
