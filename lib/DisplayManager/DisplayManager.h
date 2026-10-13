@@ -12,6 +12,9 @@ public:
   DisplayManager();
   void begin();
   void update();
+  void renderTelemetry(uint16_t f, uint16_t l, uint16_t r,
+                      uint16_t red, uint16_t green, uint16_t blue,
+                      const char* colorName, float yaw, bool imuReady);
   void showBoot();
   void showError(const char* text);
   void showColor(robot::ColorClass color);

@@ -13,6 +13,13 @@ inline void selectI2CChannel(uint8_t channel) {
   delayMicroseconds(100);
 }
 
+#define MUX_CH_IMU 0
+#define MUX_CH_COLOR 1
+#define MUX_CH_FRONT 2
+#define MUX_CH_RIGHT 3
+#define MUX_CH_LEFT 4
+#define MUX_CH_OLED 5
+
 #define DEBUG_ENABLED true
 #ifndef COMPETITION_MODE
 #define COMPETITION_MODE false
@@ -41,6 +48,7 @@ inline void selectI2CChannel(uint8_t channel) {
 
 #define MOTOR_PWM_MIN 75
 #define MOTOR_PWM_MAX 255
+#define MOTOR4_TRIM_FACTOR 1.0f
 #define MOTOR_UPDATE_PERIOD_MS 20UL
 #define ENCODER_RPM_SAMPLE_MS 50UL
 #define RPM_TARGET_MAX 250.0f
@@ -49,8 +57,8 @@ inline void selectI2CChannel(uint8_t channel) {
 #define DISTANCE_SENSOR_UPDATE_MS 25UL
 #define COLOR_SENSOR_UPDATE_MS 50UL
 #define LINE_SENSOR_UPDATE_MS 10UL
-#define DISPLAY_REFRESH_MS 50UL
-#define DEBUG_REFRESH_MS 250UL
+#define DISPLAY_REFRESH_MS 150UL
+#define DEBUG_REFRESH_MS 200UL
 #define ARUCO_MARKER_TIMEOUT_MS 3000UL
 
 #define WHEEL_DIAMETER_MM 70.0f

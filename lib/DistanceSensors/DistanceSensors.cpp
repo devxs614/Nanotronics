@@ -20,19 +20,19 @@ void DistanceSensors::begin() {
   // 3. Inicializar e integrar cada VL53L0X secuencialmente
   digitalWrite(DISTANCE_FRONT_XSHUT, HIGH);
   delay(VL53_START_SETTLE_MS);
-  selectI2CChannel(2);
+  selectI2CChannel(MUX_CH_FRONT);
   frontReady_ = frontSensor_.begin(VL53_FRONT_ADDRESS, false);
   if (frontReady_) frontReady_ = frontSensor_.startRangeContinuous(VL53_CONTINUOUS_PERIOD_MS);
 
   digitalWrite(DISTANCE_RIGHT_XSHUT, HIGH);
   delay(VL53_START_SETTLE_MS);
-  selectI2CChannel(3);
+  selectI2CChannel(MUX_CH_RIGHT);
   rightReady_ = rightSensor_.begin(VL53_RIGHT_ADDRESS, false);
   if (rightReady_) rightReady_ = rightSensor_.startRangeContinuous(VL53_CONTINUOUS_PERIOD_MS);
 
   digitalWrite(DISTANCE_LEFT_XSHUT, HIGH);
   delay(VL53_START_SETTLE_MS);
-  selectI2CChannel(4);
+  selectI2CChannel(MUX_CH_LEFT);
   leftReady_ = leftSensor_.begin(VL53_LEFT_ADDRESS, false);
   if (leftReady_) leftReady_ = leftSensor_.startRangeContinuous(VL53_CONTINUOUS_PERIOD_MS);
 
@@ -45,25 +45,25 @@ void DistanceSensors::update() {
   if (!frontReady_ && !leftReady_ && !rightReady_) return;
 
   if (frontReady_) {
-    selectI2CChannel(2);
+    selectI2CChannel(MUX_CH_FRONT);
     if (frontSensor_.isRangeComplete()) {
-      const uint16_t range = frontSensor_.readRangeResult();
+      const uint16_t range = frontSensor_.readRange();
       frontMm_ = frontSensor_.readRangeStatus() == 0 ? range : 0;
     }
   }
 
   if (rightReady_) {
-    selectI2CChannel(3);
+    selectI2CChannel(MUX_CH_RIGHT);
     if (rightSensor_.isRangeComplete()) {
-      const uint16_t range = rightSensor_.readRangeResult();
+      const uint16_t range = rightSensor_.readRange();
       rightMm_ = rightSensor_.readRangeStatus() == 0 ? range : 0;
     }
   }
 
   if (leftReady_) {
-    selectI2CChannel(4);
+    selectI2CChannel(MUX_CH_LEFT);
     if (leftSensor_.isRangeComplete()) {
-      const uint16_t range = leftSensor_.readRangeResult();
+      const uint16_t range = leftSensor_.readRange();
       leftMm_ = leftSensor_.readRangeStatus() == 0 ? range : 0;
     }
   }

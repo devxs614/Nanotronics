@@ -1,11 +1,12 @@
 #include "ColorSensor.h"
 
 void ColorSensor::begin() {
-  selectI2CChannel(1);
+  selectI2CChannel(MUX_CH_COLOR);
   pinMode(TCS_POWER, OUTPUT);
   digitalWrite(TCS_POWER, HIGH);
   delay(TCS_POWER_SETTLE_MS);
-  initialized_ = tcs_.begin(TCS34725_I2C_ADDRESS);
+  initialized_ = false;
+  if (tcs_.begin(TCS34725_I2C_ADDRESS)) initialized_ = true;
 
   candidateColor_ = robot::ColorClass::COLOR_NONE;
   consistentSamples_ = 0;
@@ -17,7 +18,7 @@ void ColorSensor::begin() {
 }
 
 void ColorSensor::update() {
-  selectI2CChannel(1);
+  selectI2CChannel(MUX_CH_COLOR);
   if (!initialized_) {
     latestReading.color = robot::ColorClass::COLOR_UNKNOWN;
     latestReading.confidence = 0.0f;
@@ -43,7 +44,7 @@ void ColorSensor::update() {
 
 void ColorSensor::readRaw() {
   if (initialized_) {
-    selectI2CChannel(1);
+    selectI2CChannel(MUX_CH_COLOR);
     tcs_.getRawData(&latestReading.r, &latestReading.g, &latestReading.b, &latestReading.c);
   }
 }

@@ -8,7 +8,7 @@ DisplayManager::DisplayManager()
 
 void DisplayManager::begin() {
   if (!ENABLE_DISPLAY) return;
-  selectI2CChannel(5);
+  selectI2CChannel(MUX_CH_OLED);
   if (!display_.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
     LOG_ERROR("OLED not found");
     return;
@@ -22,7 +22,7 @@ void DisplayManager::begin() {
 
 void DisplayManager::update() {
   if (!initialized_ || (!dirty_ && millis() - lastRefreshMs_ < DISPLAY_REFRESH_MS)) return;
-  selectI2CChannel(5);
+  selectI2CChannel(MUX_CH_OLED);
   display_.clearDisplay();
   display_.setCursor(0, 0);
   display_.print(F("Mode: "));
@@ -34,9 +34,47 @@ void DisplayManager::update() {
   lastRefreshMs_ = millis();
 }
 
+void DisplayManager::renderTelemetry(uint16_t f, uint16_t l, uint16_t r,
+                                     uint16_t red, uint16_t green, uint16_t blue,
+                                     const char* colorName, float yaw, bool imuReady) {
+  if (!initialized_) return;
+
+  selectI2CChannel(MUX_CH_OLED);
+  display_.clearDisplay();
+  display_.setCursor(0, 0);
+  display_.println(F("TELEMETRY"));
+
+  display_.print(F("F:"));
+  display_.print(f);
+  display_.print(F(" L:"));
+  display_.print(l);
+  display_.print(F(" R:"));
+  display_.println(r);
+
+  display_.print(F("RGB "));
+  display_.print(red);
+  display_.print(',');
+  display_.print(green);
+  display_.print(',');
+  display_.println(blue);
+
+  display_.print(F("Color: "));
+  display_.println(colorName ? colorName : "N/A");
+
+  display_.print(F("Yaw: "));
+  if (imuReady) {
+    display_.println(yaw, 1);
+  } else {
+    display_.println(F("N/A"));
+  }
+  display_.display();
+  lastRefreshMs_ = millis();
+  dirty_ = false;
+}
+
 void DisplayManager::showBoot() {
   if (!initialized_) return;
-  selectI2CChannel(5);
+  selectI2CChannel(MUX_CH_OLED);
   display_.clearDisplay();
   display_.setCursor(0, 0);
   display_.println(F("RoBorregos"));
@@ -49,7 +87,7 @@ void DisplayManager::showBoot() {
 
 void DisplayManager::showError(const char* text) {
   if (!initialized_) return;
-  selectI2CChannel(5);
+  selectI2CChannel(MUX_CH_OLED);
   display_.clearDisplay();
   display_.setCursor(0, 0);
   display_.println(F("ERROR"));

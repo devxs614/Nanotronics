@@ -45,18 +45,42 @@ Odometry odometry;
 SensorFusion sensorFusion;
 CalibrationManager calibrationManager;
 
+static const char* colorName(robot::ColorClass color) {
+  switch (color) {
+    case robot::ColorClass::COLOR_CYAN: return "CYAN";
+    case robot::ColorClass::COLOR_YELLOW: return "YELLOW";
+    case robot::ColorClass::COLOR_ORANGE: return "ORANGE";
+    case robot::ColorClass::COLOR_PINK: return "PINK";
+    case robot::ColorClass::COLOR_RED: return "RED";
+    case robot::ColorClass::COLOR_NONE: return "NONE";
+    default: return "UNKNOWN";
+  }
+}
+
 void setup() {
-  if (DEBUG_ENABLED && !COMPETITION_MODE) Serial.begin(115200);
+  Serial.begin(115200);
   Wire.begin();
+  Wire.setClock(100000UL);
+#ifdef TCS_POWER
+  pinMode(TCS_POWER, OUTPUT);
+  digitalWrite(TCS_POWER, HIGH);
+  delay(100);
+#endif
 
   motorController.begin();
   encoderManager.begin();
+  selectI2CChannel(MUX_CH_OLED);
+  delayMicroseconds(100);
   displayManager.begin();
   displayManager.showBoot();
 
   imuManager.begin();
   if (imuManager.healthy()) imuManager.calibrate();
+  selectI2CChannel(MUX_CH_FRONT);
+  delayMicroseconds(100);
   distanceSensors.begin();
+  selectI2CChannel(MUX_CH_COLOR);
+  delayMicroseconds(100);
   colorSensor.begin();
   lineSensor.begin();
   gripperController.begin();
@@ -103,6 +127,7 @@ void loop() {
   static uint32_t lastDistanceUpdateMs = 0;
   static uint32_t lastColorUpdateMs = 0;
   static uint32_t lastLineUpdateMs = 0;
+  static uint32_t lastDisplayTelemetryMs = 0;
   static uint32_t lastDebugMs = 0;
   const uint32_t now = millis();
 
@@ -120,6 +145,8 @@ void loop() {
   }
   if (now - lastColorUpdateMs >= COLOR_SENSOR_UPDATE_MS) {
     lastColorUpdateMs = now;
+    selectI2CChannel(MUX_CH_COLOR);
+    delayMicroseconds(100);
     colorSensor.update();
   }
   if (now - lastLineUpdateMs >= LINE_SENSOR_UPDATE_MS) {
@@ -144,6 +171,14 @@ void loop() {
   mecanumDrive.update();
   motorController.update();
 
+  if (now - lastDisplayTelemetryMs >= DISPLAY_REFRESH_MS) {
+    lastDisplayTelemetryMs = now;
+    selectI2CChannel(MUX_CH_OLED);
+    displayManager.renderTelemetry(
+        distanceSensors.readFront(), distanceSensors.readLeft(), distanceSensors.readRight(),
+        colorSensor.latestReading.r, colorSensor.latestReading.g, colorSensor.latestReading.b,
+        colorName(colorSensor.latestReading.color), imuManager.getYaw(), imuManager.healthy());
+  }
   displayManager.update();
 
   if (DEBUG_ENABLED && !COMPETITION_MODE && now - lastDebugMs >= DEBUG_REFRESH_MS) {

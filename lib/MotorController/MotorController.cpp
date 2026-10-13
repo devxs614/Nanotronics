@@ -106,6 +106,12 @@ void MotorController::update() {
     }
 
     int16_t pwm = currentPWM[motor];
+    if (motor == 3) {
+      float trimmedPwm = static_cast<float>(pwm) * MOTOR4_TRIM_FACTOR;
+      if (trimmedPwm > MOTOR_PWM_MAX) trimmedPwm = MOTOR_PWM_MAX;
+      if (trimmedPwm < -MOTOR_PWM_MAX) trimmedPwm = -MOTOR_PWM_MAX;
+      pwm = static_cast<int16_t>(trimmedPwm);
+    }
     if (pwm >= 0) {
       setMotorDirection(motor, MotorDirection::FORWARD);
       analogWrite(motorPins_[motor][0], (uint8_t)pwm);
