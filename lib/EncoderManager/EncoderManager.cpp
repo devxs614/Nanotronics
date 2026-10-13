@@ -34,12 +34,12 @@ bool encoderInverted(uint8_t motor) {
   }
 }
 
-void motor4EncoderAChanged() {
-  EncoderManager::handleMotor4Interrupt();
-}
-
-void motor4EncoderBChanged() {
-  EncoderManager::handleMotor4Interrupt();
+void isrEncoder4() {
+  if (digitalRead(ENC4_PIN_B) == HIGH) {
+    encoderTicks[3] += ENCODER4_INVERTED ? -1 : 1;
+  } else {
+    encoderTicks[3] += ENCODER4_INVERTED ? 1 : -1;
+  }
 }
 }
 
@@ -73,10 +73,12 @@ void EncoderManager::begin() {
   PCMSK1 |= _BV(PCINT9) | _BV(PCINT10);
   interrupts();
 
-  // D18 and D19 map to native external interrupts INT3 and INT2 on the Mega.
-  previousState_[3] = ((PIND >> PD3) & 1) | (((PIND >> PD2) & 1) << 1);
-  attachInterrupt(digitalPinToInterrupt(ENCODER4_A), motor4EncoderAChanged, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER4_B), motor4EncoderBChanged, CHANGE);
+  int intNum4 = digitalPinToInterrupt(ENC4_PIN_A);
+  if (intNum4 == NOT_AN_INTERRUPT) {
+    Serial.println(F("[ERROR CRÍTICO] ENC4_PIN_A no soporta attachInterrupt()"));
+  } else {
+    attachInterrupt(intNum4, isrEncoder4, RISING);
+  }
 }
 
 void EncoderManager::update() {
@@ -139,8 +141,11 @@ void EncoderManager::processPortJ(uint8_t portState) {
 }
 
 void EncoderManager::handleMotor4Interrupt() {
-  const uint8_t portState = PIND;
-  processQuadrature(3, ((portState >> PD3) & 1) | (((portState >> PD2) & 1) << 1));
+  if (digitalRead(ENC4_PIN_B) == HIGH) {
+    encoderTicks[3] += ENCODER4_INVERTED ? -1 : 1;
+  } else {
+    encoderTicks[3] += ENCODER4_INVERTED ? 1 : -1;
+  }
 }
 
 int32_t EncoderManager::getTicks(uint8_t motor) const {

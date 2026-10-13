@@ -20,8 +20,6 @@ void MotorController::begin() {
 int16_t MotorController::clampPWM(int16_t value) const {
   if (value > MOTOR_PWM_MAX) return MOTOR_PWM_MAX;
   if (value < -MOTOR_PWM_MAX) return -MOTOR_PWM_MAX;
-  if (value > 0 && value < MOTOR_PWM_MIN) return MOTOR_PWM_MIN;
-  if (value < 0 && value > -MOTOR_PWM_MIN) return -MOTOR_PWM_MIN;
   return value;
 }
 
@@ -112,12 +110,20 @@ void MotorController::update() {
       if (trimmedPwm < -MOTOR_PWM_MAX) trimmedPwm = -MOTOR_PWM_MAX;
       pwm = static_cast<int16_t>(trimmedPwm);
     }
+
+    uint16_t speed = (pwm < 0) ? static_cast<uint16_t>(-pwm) : static_cast<uint16_t>(pwm);
+    uint8_t pwmOut = 0;
+    if (speed > 0) {
+      if (speed > 255) speed = 255;
+      pwmOut = static_cast<uint8_t>(map(speed, 1, 255, MOTOR_DEADBAND_PWM, 255));
+    }
+
     if (pwm >= 0) {
       setMotorDirection(motor, MotorDirection::FORWARD);
-      analogWrite(motorPins_[motor][0], (uint8_t)pwm);
+      analogWrite(motorPins_[motor][0], pwmOut);
     } else {
       setMotorDirection(motor, MotorDirection::REVERSE);
-      analogWrite(motorPins_[motor][0], (uint8_t)(-pwm));
+      analogWrite(motorPins_[motor][0], pwmOut);
     }
   }
 

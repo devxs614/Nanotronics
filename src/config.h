@@ -46,7 +46,8 @@ inline void selectI2CChannel(uint8_t channel) {
 #define LOG_ERROR(msg) if (DEBUG_ENABLED) { Serial.println(F(msg)); }
 #define LOG_DEBUG(msg) if (DEBUG_ENABLED) { Serial.println(F(msg)); }
 
-#define MOTOR_PWM_MIN 75
+#define MOTOR_DEADBAND_PWM 15
+#define MOTOR_PWM_MIN 15
 #define MOTOR_PWM_MAX 255
 #define MOTOR4_TRIM_FACTOR 1.0f
 #define MOTOR_UPDATE_PERIOD_MS 20UL
@@ -201,14 +202,24 @@ constexpr uint8_t VL53_LEFT_ADDRESS = 0x32;
 #define MOTOR4_BIN1 37
 #define MOTOR4_BIN2 38
 
-#define ENCODER1_A 10
+#define ENCODER1_A 2
 #define ENCODER1_B 11
-#define ENCODER2_A 12
+#define ENCODER2_A 3
 #define ENCODER2_B 13
-#define ENCODER3_A 14
+#define ENCODER3_A 18
 #define ENCODER3_B 15
-#define ENCODER4_A 18
-#define ENCODER4_B 19
+#define ENCODER4_A 19
+#define ENCODER4_B 23
+
+// Alias para nombres de pines ENC*_PIN_* (Mega 2560: Pines 2, 3, 18, 19 con interrupción por hardware)
+#define ENC1_PIN_A ENCODER1_A
+#define ENC1_PIN_B ENCODER1_B
+#define ENC2_PIN_A ENCODER2_A
+#define ENC2_PIN_B ENCODER2_B
+#define ENC3_PIN_A ENCODER3_A
+#define ENC3_PIN_B ENCODER3_B
+#define ENC4_PIN_A ENCODER4_A
+#define ENC4_PIN_B ENCODER4_B
 
 #define GRIPPER_SERVO_PIN 5
 #define QTR_SENSOR_PIN_BASE A0
