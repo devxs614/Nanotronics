@@ -3,6 +3,15 @@
 
 #include <Arduino.h>
 #include <stdint.h>
+#include <Wire.h>
+
+inline void selectI2CChannel(uint8_t channel) {
+  if (channel > 7) return;
+  Wire.beginTransmission(0x70);
+  Wire.write(static_cast<uint8_t>(1U << channel));
+  Wire.endTransmission();
+  delayMicroseconds(100);
+}
 
 #define DEBUG_ENABLED true
 #ifndef COMPETITION_MODE

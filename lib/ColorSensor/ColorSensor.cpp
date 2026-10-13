@@ -1,6 +1,7 @@
 #include "ColorSensor.h"
 
 void ColorSensor::begin() {
+  selectI2CChannel(1);
   pinMode(TCS_POWER, OUTPUT);
   digitalWrite(TCS_POWER, HIGH);
   delay(TCS_POWER_SETTLE_MS);
@@ -16,6 +17,7 @@ void ColorSensor::begin() {
 }
 
 void ColorSensor::update() {
+  selectI2CChannel(1);
   if (!initialized_) {
     latestReading.color = robot::ColorClass::COLOR_UNKNOWN;
     latestReading.confidence = 0.0f;
@@ -41,6 +43,7 @@ void ColorSensor::update() {
 
 void ColorSensor::readRaw() {
   if (initialized_) {
+    selectI2CChannel(1);
     tcs_.getRawData(&latestReading.r, &latestReading.g, &latestReading.b, &latestReading.c);
   }
 }

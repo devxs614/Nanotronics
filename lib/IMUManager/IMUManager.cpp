@@ -6,6 +6,7 @@ IMUManager::IMUManager()
 }
 
 void IMUManager::begin() {
+  selectI2CChannel(0);
   initialized_ = mpu_.begin(MPU6050_I2C_ADDRESS);
   if (!initialized_) {
     LOG_ERROR("MPU6050 not found");
@@ -20,6 +21,7 @@ void IMUManager::begin() {
 
 void IMUManager::calibrate() {
   if (!initialized_) return;
+  selectI2CChannel(0);
   const uint16_t samples = 100;
   float sumZ = 0.0f;
   for (uint16_t i = 0; i < samples; ++i) {
@@ -34,6 +36,7 @@ void IMUManager::calibrate() {
 
 void IMUManager::update() {
   if (!initialized_) return;
+  selectI2CChannel(0);
   mpu_.getEvent(&accel_, &gyro_, &temp_);
   const uint32_t nowUs = micros();
   const float dt = (nowUs - lastUpdateUs_) * 0.000001f;

@@ -8,6 +8,7 @@ DisplayManager::DisplayManager()
 
 void DisplayManager::begin() {
   if (!ENABLE_DISPLAY) return;
+  selectI2CChannel(5);
   if (!display_.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
     LOG_ERROR("OLED not found");
     return;
@@ -21,6 +22,7 @@ void DisplayManager::begin() {
 
 void DisplayManager::update() {
   if (!initialized_ || (!dirty_ && millis() - lastRefreshMs_ < DISPLAY_REFRESH_MS)) return;
+  selectI2CChannel(5);
   display_.clearDisplay();
   display_.setCursor(0, 0);
   display_.print(F("Mode: "));
@@ -34,6 +36,7 @@ void DisplayManager::update() {
 
 void DisplayManager::showBoot() {
   if (!initialized_) return;
+  selectI2CChannel(5);
   display_.clearDisplay();
   display_.setCursor(0, 0);
   display_.println(F("RoBorregos"));
@@ -46,6 +49,7 @@ void DisplayManager::showBoot() {
 
 void DisplayManager::showError(const char* text) {
   if (!initialized_) return;
+  selectI2CChannel(5);
   display_.clearDisplay();
   display_.setCursor(0, 0);
   display_.println(F("ERROR"));
