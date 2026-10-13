@@ -110,13 +110,16 @@ void setup() {
 
   Wire.begin();
   Wire.setClock(100000UL);
-
+#if defined(WIRE_HAS_TIMEOUT)
+  Wire.setWireTimeout(3000, true);  // Timeout de 3 ms en transacciones I2C
+#endif
   Serial.println(F("\n=============================================="));
   Serial.println(F("   INICIALIZACIÓN TELEMETRÍA OLED + SENSORES  "));
   Serial.println(F("=============================================="));
 
   motorController.begin();
   encoderManager.begin();
+  motorController.stop();
 
   // Canal 5 (OLED)
   selectI2CChannel(5);
@@ -144,14 +147,19 @@ void setup() {
   Serial.println(F("Color TCS34725 (Canal 1): [OK]"));
 
   // Canal 2 (Frontal)
+  Serial.print(F("Probando Canal 2 (Frontal)... "));
   fOk = initVL53L0XWithRetry(frontSensor, 2, "Frontal");
+  delay(50);
 
   // Canal 3 (Derecho)
+  Serial.print(F("Probando Canal 3 (Derecho)... "));
   rOk = initVL53L0XWithRetry(rightSensor, 3, "Derecho");
+  delay(50);
 
   // Canal 4 (Izquierdo)
+  Serial.print(F("Probando Canal 4 (Izquierdo)... "));
   lOk = initVL53L0XWithRetry(leftSensor, 4, "Izquierdo");
-
+  delay(50);
   frontOk = fOk;
   rightOk = rOk;
   leftOk  = lOk;
@@ -194,6 +202,8 @@ void setup() {
   diagnostics.begin();
   visionInterface.begin();
 
+  Serial.println(F("Robot initialized successfully"));
+
   if (DEBUG_ENABLED && !COMPETITION_MODE) {
     diagnostics.printMenu();
     Serial.println(F("Robot initialized; autonomous operation does not depend on Serial."));
@@ -210,7 +220,8 @@ void loop() {
   static uint16_t distF = 0;
   static uint16_t distR = 0;
   static uint16_t distL = 0;
-
+  static bool imuOk = false;
+  static char yawStr[8] = "N/A";
   const uint32_t now = millis();
 
   // 1. Actualización rápida de Encoders y Odometría
@@ -245,6 +256,17 @@ void loop() {
     selectI2CChannel(4);
     delay(2);
     distL = leftSensor.readRange();
+
+    // Canal 0: IMU (tolerante a fallos; N/A si no responde)
+    imuOk = imuManager.healthy();
+    if (imuOk) {
+      selectI2CChannel(MUX_CH_IMU);
+      delay(2);
+      imuManager.update();
+      snprintf(yawStr, sizeof(yawStr), "%d", static_cast<int>(imuManager.getYaw()));
+    } else {
+      strcpy(yawStr, "N/A");
+    }
   }
 
   // Variables con filtro de seguridad de rango [1..1999 mm]
@@ -279,44 +301,10 @@ void loop() {
     selectI2CChannel(5);
     delay(2);
 
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-
-    // Fila 1: Encabezado
-    display.setCursor(0, 0);
-    display.print(F("--- TELEMETRIA ---"));
-
-    // Fila 2: Distancias
-    display.setCursor(0, 16);
-    display.print(F("F:"));
-    if (filteredF > 0) display.print(filteredF); else display.print(F("---"));
-    display.print(F(" L:"));
-    if (filteredL > 0) display.print(filteredL); else display.print(F("---"));
-    display.print(F(" R:"));
-    if (filteredR > 0) display.print(filteredR); else display.print(F("---"));
-
-    // Fila 3: Componentes RGB Crudas
-    display.setCursor(0, 32);
-    display.print(F("RGB: "));
-    display.print(color.latestReading.r);
-    display.print(F(","));
-    display.print(color.latestReading.g);
-    display.print(F(","));
-    display.print(color.latestReading.b);
-
-    // Fila 4: Color Clasificado + Estado IMU
-    display.setCursor(0, 48);
-    display.print(F("Col: "));
-    display.print(colorName(color.latestReading.color));
-    display.print(F(" | IMU: "));
-    if (imuManager.healthy()) {
-      display.print(imuManager.getYaw(), 1);
-    } else {
-      display.print(F("N/A"));
-    }
-
-    display.display();
+    DisplayManager::renderTelemetryTo(display, filteredF, filteredL, filteredR,
+                                      color.latestReading.r, color.latestReading.g,
+                                      color.latestReading.b, yawStr,
+                                      motorController.currentPWM);
   }
 
   // 6. Reporte estructurado y limpio por Monitor Serie cada 200 ms
@@ -338,11 +326,15 @@ void loop() {
     Serial.print(F(" B:"));
     Serial.print(color.latestReading.b);
     Serial.print(F(") | IMU: "));
-    if (imuManager.healthy()) {
-      Serial.print(imuManager.getYaw(), 1);
-    } else {
-      Serial.print(F("N/A"));
-    }
+    Serial.print(yawStr);
+    Serial.print(F(" | E1:"));
+    Serial.print(encoderManager.getTicks(0));
+    Serial.print(F(" E2:"));
+    Serial.print(encoderManager.getTicks(1));
+    Serial.print(F(" E3:"));
+    Serial.print(encoderManager.getTicks(2));
+    Serial.print(F(" E4:"));
+    Serial.print(encoderManager.getTicks(3));
     Serial.print(F(" | M1:"));
     Serial.print(motorController.currentPWM[0]);
     Serial.print(F(" M2:"));

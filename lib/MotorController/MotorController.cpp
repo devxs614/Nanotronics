@@ -83,6 +83,37 @@ void MotorController::stopAll() {
   lastUpdateUs_ = micros();
 }
 
+void MotorController::setSpeeds(int16_t m1, int16_t m2, int16_t m3, int16_t m4) {
+  setMotorPWM(0, m1);
+  setMotorPWM(1, m2);
+  setMotorPWM(2, m3);
+  setMotorPWM(3, m4);
+}
+
+void MotorController::stop() {
+  stopAll();
+}
+
+void MotorController::moveForward(uint8_t speed) {
+  const int16_t s = speed;
+  setSpeeds(s, s, s, s);
+}
+
+void MotorController::moveBackward(uint8_t speed) {
+  const int16_t s = speed;
+  setSpeeds(-s, -s, -s, -s);
+}
+
+void MotorController::spinRight(uint8_t speed) {
+  const int16_t s = speed;
+  setSpeeds(s, -s, s, -s);
+}
+
+void MotorController::spinLeft(uint8_t speed) {
+  const int16_t s = speed;
+  setSpeeds(-s, s, -s, s);
+}
+
 void MotorController::update() {
   const uint32_t now = micros();
   const uint32_t elapsedUs = now - lastUpdateUs_;
@@ -118,7 +149,10 @@ void MotorController::update() {
       pwmOut = static_cast<uint8_t>(map(speed, 1, 255, MOTOR_DEADBAND_PWM, 255));
     }
 
-    if (pwm >= 0) {
+    if (pwmOut == 0) {
+      analogWrite(motorPins_[motor][0], 0);
+      setMotorDirection(motor, MotorDirection::COAST);
+    } else if (pwm > 0) {
       setMotorDirection(motor, MotorDirection::FORWARD);
       analogWrite(motorPins_[motor][0], pwmOut);
     } else {

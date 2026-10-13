@@ -22,6 +22,13 @@ public:
   void stopAll();
   void update();
 
+  void setSpeeds(int16_t m1, int16_t m2, int16_t m3, int16_t m4);
+  void stop();
+  void moveForward(uint8_t speed);
+  void moveBackward(uint8_t speed);
+  void spinRight(uint8_t speed);
+  void spinLeft(uint8_t speed);
+
   int16_t targetPWM[4];
   int16_t currentPWM[4];
 

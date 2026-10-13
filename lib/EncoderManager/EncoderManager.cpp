@@ -1,21 +1,8 @@
 #include "EncoderManager.h"
-#include <avr/interrupt.h>
-#include <avr/io.h>
 
 volatile int32_t encoderTicks[4] = {0, 0, 0, 0};
-EncoderManager* EncoderManager::instance_ = nullptr;
-volatile uint8_t EncoderManager::previousPortB_ = 0;
-volatile uint8_t EncoderManager::previousPortJ_ = 0;
-volatile uint8_t EncoderManager::previousState_[4] = {0, 0, 0, 0};
 
 namespace {
-const uint8_t kQuadratureTransitions[16] = {
-  0, 1, 255, 0,
-  255, 0, 0, 1,
-  1, 0, 0, 255,
-  0, 255, 1, 0
-};
-
 float ticksPerOutputRev(uint8_t motor) {
   switch (motor) {
     case 0: return ENCODER_TICKS_PER_OUTPUT_REV_M1;
@@ -25,60 +12,46 @@ float ticksPerOutputRev(uint8_t motor) {
   }
 }
 
-bool encoderInverted(uint8_t motor) {
-  switch (motor) {
-    case 0: return ENCODER1_INVERTED;
-    case 1: return ENCODER2_INVERTED;
-    case 2: return ENCODER3_INVERTED;
-    default: return ENCODER4_INVERTED;
-  }
+// Flanco de subida en el canal A; el nivel del canal B define el sentido.
+inline void countTick(uint8_t motor, uint8_t pinB, bool inverted) {
+  const bool forward = (digitalRead(pinB) == HIGH) != inverted;
+  encoderTicks[motor] += forward ? 1 : -1;
 }
 
-void isrEncoder4() {
-  if (digitalRead(ENC4_PIN_B) == HIGH) {
-    encoderTicks[3] += ENCODER4_INVERTED ? -1 : 1;
-  } else {
-    encoderTicks[3] += ENCODER4_INVERTED ? 1 : -1;
+void isrEncoder1() { countTick(0, ENC1_PIN_B, ENCODER1_INVERTED); }
+void isrEncoder2() { countTick(1, ENC2_PIN_B, ENCODER2_INVERTED); }
+void isrEncoder3() { countTick(2, ENC3_PIN_B, ENCODER3_INVERTED); }
+void isrEncoder4() { countTick(3, ENC4_PIN_B, ENCODER4_INVERTED); }
+
+void attachEncoder(uint8_t index, uint8_t pinA, uint8_t pinB, void (*isr)()) {
+  pinMode(pinA, INPUT_PULLUP);
+  pinMode(pinB, INPUT_PULLUP);
+  const int intNum = digitalPinToInterrupt(pinA);
+  if (intNum == NOT_AN_INTERRUPT) {
+    Serial.print(F("[ERROR ENCODER] Pin sin interrupcion (Enc"));
+    Serial.print(index);
+    Serial.print(F("): "));
+    Serial.println(pinA);
+    return;
   }
+  attachInterrupt(intNum, isr, RISING);
 }
 }
 
 void EncoderManager::begin() {
-  instance_ = this;
-
   for (uint8_t i = 0; i < 4; ++i) {
     sampleTicks_[i] = 0;
     rpm_[i] = 0.0f;
   }
-  lastSampleMs_ = millis();
-  pinMode(ENCODER1_A, INPUT_PULLUP);
-  pinMode(ENCODER1_B, INPUT_PULLUP);
-  pinMode(ENCODER2_A, INPUT_PULLUP);
-  pinMode(ENCODER2_B, INPUT_PULLUP);
-  pinMode(ENCODER3_A, INPUT_PULLUP);
-  pinMode(ENCODER3_B, INPUT_PULLUP);
-  pinMode(ENCODER4_A, INPUT_PULLUP);
-  pinMode(ENCODER4_B, INPUT_PULLUP);
-
   noInterrupts();
-  previousPortB_ = PINB;
-  previousPortJ_ = PINJ;
-  previousState_[0] = ((PINB >> PB4) & 1) | (((PINB >> PB5) & 1) << 1);
-  previousState_[1] = ((PINB >> PB6) & 1) | (((PINB >> PB7) & 1) << 1);
-  previousState_[2] = ((PINJ >> PJ1) & 1) | (((PINJ >> PJ0) & 1) << 1);
-
-  // D10-D13 are PB4-PB7 and D14-D15 are PJ1-PJ0 on the Mega 2560.
-  PCICR |= _BV(PCIE0) | _BV(PCIE1);
-  PCMSK0 |= _BV(PCINT4) | _BV(PCINT5) | _BV(PCINT6) | _BV(PCINT7);
-  PCMSK1 |= _BV(PCINT9) | _BV(PCINT10);
+  for (uint8_t i = 0; i < 4; ++i) encoderTicks[i] = 0;
   interrupts();
+  lastSampleMs_ = millis();
 
-  int intNum4 = digitalPinToInterrupt(ENC4_PIN_A);
-  if (intNum4 == NOT_AN_INTERRUPT) {
-    Serial.println(F("[ERROR CRÍTICO] ENC4_PIN_A no soporta attachInterrupt()"));
-  } else {
-    attachInterrupt(intNum4, isrEncoder4, RISING);
-  }
+  attachEncoder(1, ENC1_PIN_A, ENC1_PIN_B, isrEncoder1);
+  attachEncoder(2, ENC2_PIN_A, ENC2_PIN_B, isrEncoder2);
+  attachEncoder(3, ENC3_PIN_A, ENC3_PIN_B, isrEncoder3);
+  attachEncoder(4, ENC4_PIN_A, ENC4_PIN_B, isrEncoder4);
 }
 
 void EncoderManager::update() {
@@ -107,53 +80,27 @@ void EncoderManager::update() {
   lastSampleMs_ = now;
 }
 
-void EncoderManager::processQuadrature(uint8_t motor, uint8_t state) {
-  const uint8_t transition = (previousState_[motor] << 2) | (state & 0x03);
-  const uint8_t direction = kQuadratureTransitions[transition];
-  previousState_[motor] = state & 0x03;
-
-  if (direction == 1) {
-    encoderTicks[motor] += encoderInverted(motor) ? -1 : 1;
-  } else if (direction == 255) {
-    encoderTicks[motor] += encoderInverted(motor) ? 1 : -1;
-  }
-}
-
-void EncoderManager::processPortB(uint8_t portState) {
-  const uint8_t changed = portState ^ previousPortB_;
-  previousPortB_ = portState;
-
-  if (changed & (_BV(PB4) | _BV(PB5))) {
-    processQuadrature(0, ((portState >> PB4) & 1) | (((portState >> PB5) & 1) << 1));
-  }
-  if (changed & (_BV(PB6) | _BV(PB7))) {
-    processQuadrature(1, ((portState >> PB6) & 1) | (((portState >> PB7) & 1) << 1));
-  }
-}
-
-void EncoderManager::processPortJ(uint8_t portState) {
-  const uint8_t changed = portState ^ previousPortJ_;
-  previousPortJ_ = portState;
-
-  if (changed & (_BV(PJ1) | _BV(PJ0))) {
-    processQuadrature(2, ((portState >> PJ1) & 1) | (((portState >> PJ0) & 1) << 1));
-  }
-}
-
-void EncoderManager::handleMotor4Interrupt() {
-  if (digitalRead(ENC4_PIN_B) == HIGH) {
-    encoderTicks[3] += ENCODER4_INVERTED ? -1 : 1;
-  } else {
-    encoderTicks[3] += ENCODER4_INVERTED ? 1 : -1;
-  }
-}
-
-int32_t EncoderManager::getTicks(uint8_t motor) const {
-  if (motor >= 4) return 0;
+int32_t EncoderManager::getTicks(uint8_t motorIdx) const {
+  if (motorIdx >= 4) return 0;
   noInterrupts();
-  const int32_t ticks = encoderTicks[motor];
+  const int32_t ticks = encoderTicks[motorIdx];
   interrupts();
   return ticks;
+}
+
+void EncoderManager::resetTicks() {
+  noInterrupts();
+  for (uint8_t i = 0; i < 4; ++i) {
+    encoderTicks[i] = 0;
+    sampleTicks_[i] = 0;
+    rpm_[i] = 0.0f;
+  }
+  lastSampleMs_ = millis();
+  interrupts();
+}
+
+void EncoderManager::reset() {
+  resetTicks();
 }
 
 float EncoderManager::getRPM(uint8_t motor) const {
@@ -174,27 +121,4 @@ float EncoderManager::getVelocityMmPerSec(uint8_t motor) const {
   const float wheelCircumferenceMm = PI * WHEEL_DIAMETER_MM;
   const float rpm = getRPM(motor);
   return (rpm / 60.0f) * wheelCircumferenceMm;
-}
-
-void EncoderManager::reset() {
-  noInterrupts();
-  for (uint8_t i = 0; i < 4; ++i) {
-    encoderTicks[i] = 0;
-    sampleTicks_[i] = 0;
-    rpm_[i] = 0.0f;
-  }
-  lastSampleMs_ = millis();
-  interrupts();
-}
-
-ISR(PCINT0_vect) {
-  if (EncoderManager::instance_ != nullptr) {
-    EncoderManager::processPortB(PINB);
-  }
-}
-
-ISR(PCINT1_vect) {
-  if (EncoderManager::instance_ != nullptr) {
-    EncoderManager::processPortJ(PINJ);
-  }
 }

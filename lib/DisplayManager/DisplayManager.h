@@ -12,9 +12,14 @@ public:
   DisplayManager();
   void begin();
   void update();
+  // Dashboard de 4 filas (yawStr = "N/A" si la IMU no responde)
   void renderTelemetry(uint16_t f, uint16_t l, uint16_t r,
-                      uint16_t red, uint16_t green, uint16_t blue,
-                      const char* colorName, float yaw, bool imuReady);
+                       uint16_t red, uint16_t green, uint16_t blue,
+                       const char* yawStr, const int16_t pwm[4]);
+  static void renderTelemetryTo(Adafruit_SSD1306& target,
+                                uint16_t f, uint16_t l, uint16_t r,
+                                uint16_t red, uint16_t green, uint16_t blue,
+                                const char* yawStr, const int16_t pwm[4]);
   void showBoot();
   void showError(const char* text);
   void showColor(robot::ColorClass color);
@@ -25,6 +30,10 @@ public:
   void showStatus(const char* mode, const char* sensor);
 
 private:
+  static void drawTelemetry(Adafruit_SSD1306& target,
+                            uint16_t f, uint16_t l, uint16_t r,
+                            uint16_t red, uint16_t green, uint16_t blue,
+                            const char* yawStr, const int16_t pwm[4]);
   Adafruit_SSD1306 display_;
   char mode_[16];
   char sensor_[16];

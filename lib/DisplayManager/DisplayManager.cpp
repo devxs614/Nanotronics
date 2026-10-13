@@ -34,40 +34,60 @@ void DisplayManager::update() {
   lastRefreshMs_ = millis();
 }
 
+void DisplayManager::drawTelemetry(Adafruit_SSD1306& target,
+                                   uint16_t f, uint16_t l, uint16_t r,
+                                   uint16_t red, uint16_t green, uint16_t blue,
+                                   const char* yawStr, const int16_t pwm[4]) {
+  selectI2CChannel(MUX_CH_OLED);
+  target.clearDisplay();
+  target.setTextSize(1);
+  target.setTextColor(SSD1306_WHITE);
+
+  // Fila 1: "ROBORREGOS | YAW:xxx"
+  target.setCursor(0, 0);
+  target.print(F("ROBORREGOS | YAW:"));
+  target.print(yawStr ? yawStr : "N/A");
+
+  // Fila 2: distancias en mm
+  target.setCursor(0, 16);
+  target.print(F("F:"));
+  if (f > 0) target.print(f); else target.print(F("---"));
+  target.print(F(" L:"));
+  if (l > 0) target.print(l); else target.print(F("---"));
+  target.print(F(" R:"));
+  if (r > 0) target.print(r); else target.print(F("---"));
+
+  // Fila 3: RGB crudo
+  target.setCursor(0, 32);
+  target.print(F("RGB:"));
+  target.print(red);
+  target.print(',');
+  target.print(green);
+  target.print(',');
+  target.print(blue);
+
+  // Fila 4: PWM de motores
+  target.setCursor(0, 48);
+  target.print(F("M:"));
+  for (uint8_t i = 0; i < 4; ++i) {
+    if (i > 0) target.print(' ');
+    target.print(pwm[i]);
+  }
+  target.display();
+}
+
+void DisplayManager::renderTelemetryTo(Adafruit_SSD1306& target,
+                                       uint16_t f, uint16_t l, uint16_t r,
+                                       uint16_t red, uint16_t green, uint16_t blue,
+                                       const char* yawStr, const int16_t pwm[4]) {
+  drawTelemetry(target, f, l, r, red, green, blue, yawStr, pwm);
+}
+
 void DisplayManager::renderTelemetry(uint16_t f, uint16_t l, uint16_t r,
                                      uint16_t red, uint16_t green, uint16_t blue,
-                                     const char* colorName, float yaw, bool imuReady) {
+                                     const char* yawStr, const int16_t pwm[4]) {
   if (!initialized_) return;
-
-  selectI2CChannel(MUX_CH_OLED);
-  display_.clearDisplay();
-  display_.setCursor(0, 0);
-  display_.println(F("TELEMETRY"));
-
-  display_.print(F("F:"));
-  display_.print(f);
-  display_.print(F(" L:"));
-  display_.print(l);
-  display_.print(F(" R:"));
-  display_.println(r);
-
-  display_.print(F("RGB "));
-  display_.print(red);
-  display_.print(',');
-  display_.print(green);
-  display_.print(',');
-  display_.println(blue);
-
-  display_.print(F("Color: "));
-  display_.println(colorName ? colorName : "N/A");
-
-  display_.print(F("Yaw: "));
-  if (imuReady) {
-    display_.println(yaw, 1);
-  } else {
-    display_.println(F("N/A"));
-  }
-  display_.display();
+  drawTelemetry(display_, f, l, r, red, green, blue, yawStr, pwm);
   lastRefreshMs_ = millis();
   dirty_ = false;
 }
