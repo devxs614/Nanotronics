@@ -14,6 +14,8 @@ inline void selectI2CChannel(uint8_t channel) {
 }
 
 #define MUX_CH_IMU 0
+#define IMU_MUX_CHANNEL MUX_CH_IMU
+#define MPU6050_I2C_ADDR 0x68
 #define MUX_CH_COLOR 1
 #define MUX_CH_FRONT 2
 #define MUX_CH_RIGHT 3
@@ -72,6 +74,8 @@ inline void selectI2CChannel(uint8_t channel) {
 #define ENCODER_TICKS_PER_OUTPUT_REV_M2 260.0f
 #define ENCODER_TICKS_PER_OUTPUT_REV_M3 260.0f
 #define ENCODER_TICKS_PER_OUTPUT_REV_M4 260.0f
+
+constexpr float TICKS_PER_MM = 2.6442f;
 
 #define KP_M1 0.35f
 #define KI_M1 0.10f

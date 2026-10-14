@@ -87,6 +87,101 @@ bool initVL53L0XWithRetry(Adafruit_VL53L0X& sensor, uint8_t channel, const char*
   return false;
 }
 
+bool imuFound = false;
+uint8_t imuChannel = 0;
+uint8_t imuAddr = 0;
+uint8_t imuWhoAmI = 0;
+float yawDeg = 0.0f;
+float gyroBiasZ = 0.0f;
+uint32_t lastImuUs = 0;
+
+constexpr uint8_t REG_PWR_MGMT_1 = 0x6B;
+constexpr uint8_t REG_WHO_AM_I = 0x75;
+constexpr uint8_t REG_ACCEL_XOUT_H = 0x3B;
+constexpr float ACCEL_LSB_PER_G = 16384.0f;
+constexpr float GYRO_LSB_PER_DPS = 131.0f;
+
+bool i2cPing(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return (Wire.endTransmission() == 0);
+}
+
+bool writeRegister(uint8_t addr, uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool readRegisters(uint8_t addr, uint8_t reg, uint8_t* buf, uint8_t len) {
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(addr, len) != len) return false;
+  for (uint8_t i = 0; i < len; i++) buf[i] = Wire.read();
+  return true;
+}
+
+bool readImuRaw(int16_t& ax, int16_t& ay, int16_t& az, int16_t& gx, int16_t& gy, int16_t& gz) {
+  uint8_t b[14];
+  selectI2CChannel(imuChannel);
+  if (!readRegisters(imuAddr, REG_ACCEL_XOUT_H, b, 14)) return false;
+  ax = (int16_t)((b[0] << 8) | b[1]);
+  ay = (int16_t)((b[2] << 8) | b[3]);
+  az = (int16_t)((b[4] << 8) | b[5]);
+  gx = (int16_t)((b[8] << 8) | b[9]);
+  gy = (int16_t)((b[10] << 8) | b[11]);
+  gz = (int16_t)((b[12] << 8) | b[13]);
+  return true;
+}
+
+void scanMuxForImu() {
+  const uint8_t addrs[2] = {0x68, 0x69};
+  for (uint8_t ch = 0; ch < 8 && !imuFound; ch++) {
+    selectI2CChannel(ch);
+    delay(2);
+    for (uint8_t i = 0; i < 2; i++) {
+      const uint8_t addr = addrs[i];
+      if (!i2cPing(addr)) continue;
+
+      uint8_t who = 0;
+      readRegisters(addr, REG_WHO_AM_I, &who, 1);
+      writeRegister(addr, REG_PWR_MGMT_1, 0x00);
+      delay(10);
+
+      imuFound = true;
+      imuChannel = ch;
+      imuAddr = addr;
+      imuWhoAmI = who;
+      Serial.print(F("[SCANNER OK] MPU6050 en Canal "));
+      Serial.print(ch);
+      Serial.print(F(", Direccion 0x"));
+      Serial.print(addr, HEX);
+      Serial.print(F(", WHO_AM_I = 0x"));
+      Serial.println(who, HEX);
+      break;
+    }
+  }
+  if (!imuFound) Serial.println(F("[SCANNER FALLO] MPU6050 no responde en canales 0-7"));
+}
+
+void calibrateGyroBias() {
+  const uint8_t samples = 100;
+  float sum = 0.0f;
+  uint8_t ok = 0;
+  int16_t ax, ay, az, gx, gy, gz;
+  for (uint8_t i = 0; i < samples; i++) {
+    if (readImuRaw(ax, ay, az, gx, gy, gz)) {
+      sum += gz / GYRO_LSB_PER_DPS;
+      ok++;
+    }
+    delay(5);
+  }
+  if (ok > 0) gyroBiasZ = sum / ok;
+  Serial.print(F("Bias gyro Z (dps): "));
+  Serial.println(gyroBiasZ, 3);
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -154,9 +249,14 @@ void setup() {
   rightOk = rOk;
   leftOk  = lOk;
 
-  // Canal 0 (IMU)
-  imuManager.begin();
-  if (imuManager.healthy()) imuManager.calibrate();
+  // Canal 0..7 (IMU): escaneo MUX, despertado por registros y bias del giroscopio
+  scanMuxForImu();
+  if (imuFound) {
+    calibrateGyroBias();
+    lastImuUs = micros();
+  }
+  Serial.print(F("IMU MPU6050: "));
+  Serial.println(imuFound ? F("[OK]") : F("[FALLÓ]"));
 
   lineSensor.begin();
   gripperController.begin();
@@ -210,15 +310,13 @@ void loop() {
   static uint16_t distF = 0;
   static uint16_t distR = 0;
   static uint16_t distL = 0;
-  static bool imuOk = false;
-  static char yawStr[8] = "N/A";
+  static char yawStr[8] = "--";
   const uint32_t now = millis();
 
   // 1. Actualización rápida de Encoders y Odometría
   if (now - lastFastUpdateMs >= FAST_SENSOR_UPDATE_MS) {
     lastFastUpdateMs = now;
     encoderManager.update();
-    imuManager.update();
     odometry.update();
     sensorFusion.update();
   }
@@ -247,15 +345,23 @@ void loop() {
     delay(2);
     distL = leftSensor.readRange();
 
-    // Canal 0: IMU (tolerante a fallos; N/A si no responde)
-    imuOk = imuManager.healthy();
-    if (imuOk) {
-      selectI2CChannel(MUX_CH_IMU);
-      delay(2);
-      imuManager.update();
-      snprintf(yawStr, sizeof(yawStr), "%d", static_cast<int>(imuManager.getYaw()));
+    // IMU por registros raw (canal detectado por el escaneo; N/A si no responde)
+    if (imuFound) {
+      int16_t ax, ay, az, gx, gy, gz;
+      if (readImuRaw(ax, ay, az, gx, gy, gz)) {
+        const uint32_t nowUs = micros();
+        const float dt = (nowUs - lastImuUs) / 1000000.0f;
+        lastImuUs = nowUs;
+        if (dt > 0.0f && dt < 0.25f) {
+          const float gzd = gz / GYRO_LSB_PER_DPS - gyroBiasZ;
+          yawDeg += gzd * dt;
+          if (yawDeg > 180.0f) yawDeg -= 360.0f;
+          else if (yawDeg < -180.0f) yawDeg += 360.0f;
+        }
+      }
+      snprintf(yawStr, sizeof(yawStr), "%d", static_cast<int>(yawDeg));
     } else {
-      strcpy(yawStr, "N/A");
+      strcpy(yawStr, "--");
     }
   }
 
