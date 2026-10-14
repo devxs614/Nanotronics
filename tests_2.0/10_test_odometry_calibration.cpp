@@ -10,7 +10,7 @@ Adafruit_SSD1306 display(128, 64, &Wire, -1);
 EncoderManager encoderManager;
 MotorController motorController;
 
-const float DISTANCIA_PRUEBA_MM = 500.0f;
+const float DISTANCIA_PRUEBA_MM = 300.0f;  // 1 celda de pista = 30 cm
 
 bool oledOk = false;
 int32_t enc1_current = 0;
