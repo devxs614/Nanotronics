@@ -37,57 +37,59 @@ void DisplayManager::update() {
 void DisplayManager::drawTelemetry(Adafruit_SSD1306& target,
                                    uint16_t f, uint16_t l, uint16_t r,
                                    uint16_t red, uint16_t green, uint16_t blue,
-                                   const char* yawStr, const int16_t pwm[4]) {
+                                   const char* yawStr, const char* colorStr,
+                                   const int16_t pwm[4]) {
+  // Buffers de 22 bytes: snprintf trunca a 21 caracteres (ancho de la OLED)
+  char line[22];
+  char dist[3][6];
+  const uint16_t d[3] = {f, l, r};
+  for (uint8_t i = 0; i < 3; ++i) {
+    if (d[i] > 0) snprintf(dist[i], sizeof(dist[i]), "%u", d[i]);
+    else strcpy(dist[i], "---");
+  }
+
   selectI2CChannel(MUX_CH_OLED);
   target.clearDisplay();
   target.setTextSize(1);
   target.setTextColor(SSD1306_WHITE);
+  target.setTextWrap(false);
 
-  // Fila 1: "ROBORREGOS | YAW:xxx"
+  // Fila 1: "YAW:[yaw] | C:[Color]"
+  snprintf(line, sizeof(line), "YAW:%s | C:%s", yawStr ? yawStr : "N/A", colorStr ? colorStr : "Desc");
   target.setCursor(0, 0);
-  target.print(F("ROBORREGOS | YAW:"));
-  target.print(yawStr ? yawStr : "N/A");
+  target.print(line);
 
-  // Fila 2: distancias en mm
+  // Fila 2: "F:[f] L:[l] R:[r]" (mm)
+  snprintf(line, sizeof(line), "F:%s L:%s R:%s", dist[0], dist[1], dist[2]);
   target.setCursor(0, 16);
-  target.print(F("F:"));
-  if (f > 0) target.print(f); else target.print(F("---"));
-  target.print(F(" L:"));
-  if (l > 0) target.print(l); else target.print(F("---"));
-  target.print(F(" R:"));
-  if (r > 0) target.print(r); else target.print(F("---"));
+  target.print(line);
 
-  // Fila 3: RGB crudo
+  // Fila 3: "RGB:[r],[g],[b]" (crudo)
+  snprintf(line, sizeof(line), "RGB:%u,%u,%u", red, green, blue);
   target.setCursor(0, 32);
-  target.print(F("RGB:"));
-  target.print(red);
-  target.print(',');
-  target.print(green);
-  target.print(',');
-  target.print(blue);
+  target.print(line);
 
-  // Fila 4: PWM de motores
+  // Fila 4: "M:[m1] [m2] [m3] [m4]"
+  snprintf(line, sizeof(line), "M:%d %d %d %d", pwm[0], pwm[1], pwm[2], pwm[3]);
   target.setCursor(0, 48);
-  target.print(F("M:"));
-  for (uint8_t i = 0; i < 4; ++i) {
-    if (i > 0) target.print(' ');
-    target.print(pwm[i]);
-  }
+  target.print(line);
   target.display();
 }
 
 void DisplayManager::renderTelemetryTo(Adafruit_SSD1306& target,
                                        uint16_t f, uint16_t l, uint16_t r,
                                        uint16_t red, uint16_t green, uint16_t blue,
-                                       const char* yawStr, const int16_t pwm[4]) {
-  drawTelemetry(target, f, l, r, red, green, blue, yawStr, pwm);
+                                       const char* yawStr, const char* colorStr,
+                                       const int16_t pwm[4]) {
+  drawTelemetry(target, f, l, r, red, green, blue, yawStr, colorStr, pwm);
 }
 
 void DisplayManager::renderTelemetry(uint16_t f, uint16_t l, uint16_t r,
                                      uint16_t red, uint16_t green, uint16_t blue,
-                                     const char* yawStr, const int16_t pwm[4]) {
+                                     const char* yawStr, const char* colorStr,
+                                     const int16_t pwm[4]) {
   if (!initialized_) return;
-  drawTelemetry(display_, f, l, r, red, green, blue, yawStr, pwm);
+  drawTelemetry(display_, f, l, r, red, green, blue, yawStr, colorStr, pwm);
   lastRefreshMs_ = millis();
   dirty_ = false;
 }

@@ -63,18 +63,6 @@ bool frontOk = false;
 bool rightOk = false;
 bool leftOk  = false;
 
-static const char* colorName(robot::ColorClass colorVal) {
-  switch (colorVal) {
-    case robot::ColorClass::COLOR_CYAN:   return "Cian";
-    case robot::ColorClass::COLOR_YELLOW: return "Amarillo";
-    case robot::ColorClass::COLOR_ORANGE: return "Naranja";
-    case robot::ColorClass::COLOR_PINK:   return "Rosa";
-    case robot::ColorClass::COLOR_RED:    return "Rojo";
-    case robot::ColorClass::COLOR_NONE:   return "Ninguno";
-    default:                              return "Desc";
-  }
-}
-
 bool initVL53L0XWithRetry(Adafruit_VL53L0X& sensor, uint8_t channel, const char* name) {
   for (uint8_t attempt = 1; attempt <= 3; attempt++) {
     selectI2CChannel(channel);
@@ -139,12 +127,14 @@ void setup() {
     display.display();
   }
 
-  // Canal 1 (Color)
+  // Canal 1 (Color): color.begin() carga la calibracion desde la EEPROM
   selectI2CChannel(1);
-  delay(20);
+  delay(2);
   color.begin();
   colorOk = true;
   Serial.println(F("Color TCS34725 (Canal 1): [OK]"));
+  Serial.println(color.isCalibrated() ? F("Calibracion de color EEPROM: [CARGADA]")
+                                      : F("Calibracion de color EEPROM: [NO ENCONTRADA]"));
 
   // Canal 2 (Frontal)
   Serial.print(F("Probando Canal 2 (Frontal)... "));
@@ -304,6 +294,7 @@ void loop() {
     DisplayManager::renderTelemetryTo(display, filteredF, filteredL, filteredR,
                                       color.latestReading.r, color.latestReading.g,
                                       color.latestReading.b, yawStr,
+                                      color.getColorName(),
                                       motorController.currentPWM);
   }
 
@@ -318,7 +309,7 @@ void loop() {
     Serial.print(F("mm | R: "));
     Serial.print(filteredR);
     Serial.print(F("mm | Col: ["));
-    Serial.print(colorName(color.latestReading.color));
+    Serial.print(color.getColorName());
     Serial.print(F("] (R:"));
     Serial.print(color.latestReading.r);
     Serial.print(F(" G:"));

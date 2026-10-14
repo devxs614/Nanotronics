@@ -4,7 +4,10 @@
 #include <Arduino.h>
 #include "config.h"
 
-extern volatile int32_t encoderTicks[4];
+extern volatile int32_t enc1_ticks;
+extern volatile int32_t enc2_ticks;
+extern volatile int32_t enc3_ticks;
+extern volatile int32_t enc4_ticks;
 
 class EncoderManager {
 public:

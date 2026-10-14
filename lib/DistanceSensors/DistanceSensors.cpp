@@ -7,35 +7,21 @@ void DistanceSensors::begin() {
   pinMode(TCS_POWER, OUTPUT);
   digitalWrite(TCS_POWER, LOW);
 
-  // 2. Colocar los 3 VL53L0X en estado de reset
-  pinMode(DISTANCE_FRONT_XSHUT, OUTPUT);
-  pinMode(DISTANCE_LEFT_XSHUT, OUTPUT);
-  pinMode(DISTANCE_RIGHT_XSHUT, OUTPUT);
-
-  digitalWrite(DISTANCE_FRONT_XSHUT, LOW);
-  digitalWrite(DISTANCE_LEFT_XSHUT, LOW);
-  digitalWrite(DISTANCE_RIGHT_XSHUT, LOW);
-  delay(VL53_RESET_SETTLE_MS);
-
-  // 3. Inicializar e integrar cada VL53L0X secuencialmente
-  digitalWrite(DISTANCE_FRONT_XSHUT, HIGH);
-  delay(VL53_START_SETTLE_MS);
+  // 2. Inicializar cada VL53L0X a traves del MUX (sin XSHUT)
   selectI2CChannel(MUX_CH_FRONT);
-  frontReady_ = frontSensor_.begin(VL53_FRONT_ADDRESS, false);
+  delay(VL53_START_SETTLE_MS);
+  frontReady_ = frontSensor_.begin(0x29, false);
   if (frontReady_) frontReady_ = frontSensor_.startRangeContinuous(VL53_CONTINUOUS_PERIOD_MS);
 
-  digitalWrite(DISTANCE_RIGHT_XSHUT, HIGH);
-  delay(VL53_START_SETTLE_MS);
   selectI2CChannel(MUX_CH_RIGHT);
-  rightReady_ = rightSensor_.begin(VL53_RIGHT_ADDRESS, false);
+  delay(VL53_START_SETTLE_MS);
+  rightReady_ = rightSensor_.begin(0x29, false);
   if (rightReady_) rightReady_ = rightSensor_.startRangeContinuous(VL53_CONTINUOUS_PERIOD_MS);
 
-  digitalWrite(DISTANCE_LEFT_XSHUT, HIGH);
-  delay(VL53_START_SETTLE_MS);
   selectI2CChannel(MUX_CH_LEFT);
-  leftReady_ = leftSensor_.begin(VL53_LEFT_ADDRESS, false);
+  delay(VL53_START_SETTLE_MS);
+  leftReady_ = leftSensor_.begin(0x29, false);
   if (leftReady_) leftReady_ = leftSensor_.startRangeContinuous(VL53_CONTINUOUS_PERIOD_MS);
-
   frontMm_ = 0;
   leftMm_ = 0;
   rightMm_ = 0;

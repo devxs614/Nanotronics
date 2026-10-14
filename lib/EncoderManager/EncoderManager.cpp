@@ -1,6 +1,24 @@
 #include "EncoderManager.h"
 
-volatile int32_t encoderTicks[4] = {0, 0, 0, 0};
+// Contadores de ticks absolutos (modificados desde las ISR)
+volatile int32_t enc1_ticks = 0;
+volatile int32_t enc2_ticks = 0;
+volatile int32_t enc3_ticks = 0;
+volatile int32_t enc4_ticks = 0;
+
+// Flanco de subida en el canal A; el nivel del canal B define el sentido.
+void isrEncoder1() {
+  if ((digitalRead(ENC1_PIN_B) == HIGH) != ENCODER1_INVERTED) enc1_ticks++; else enc1_ticks--;
+}
+void isrEncoder2() {
+  if ((digitalRead(ENC2_PIN_B) == HIGH) != ENCODER2_INVERTED) enc2_ticks++; else enc2_ticks--;
+}
+void isrEncoder3() {
+  if ((digitalRead(ENC3_PIN_B) == HIGH) != ENCODER3_INVERTED) enc3_ticks++; else enc3_ticks--;
+}
+void isrEncoder4() {
+  if ((digitalRead(ENC4_PIN_B) == HIGH) != ENCODER4_INVERTED) enc4_ticks++; else enc4_ticks--;
+}
 
 namespace {
 float ticksPerOutputRev(uint8_t motor) {
@@ -12,29 +30,30 @@ float ticksPerOutputRev(uint8_t motor) {
   }
 }
 
-// Flanco de subida en el canal A; el nivel del canal B define el sentido.
-inline void countTick(uint8_t motor, uint8_t pinB, bool inverted) {
-  const bool forward = (digitalRead(pinB) == HIGH) != inverted;
-  encoderTicks[motor] += forward ? 1 : -1;
+// Lectura atomica del contador del motor indicado (0..3)
+int32_t readTicksAtomic(uint8_t motor) {
+  noInterrupts();
+  int32_t tempTicks;
+  switch (motor) {
+    case 0:  tempTicks = enc1_ticks; break;
+    case 1:  tempTicks = enc2_ticks; break;
+    case 2:  tempTicks = enc3_ticks; break;
+    default: tempTicks = enc4_ticks; break;
+  }
+  interrupts();
+  return tempTicks;
 }
 
-void isrEncoder1() { countTick(0, ENC1_PIN_B, ENCODER1_INVERTED); }
-void isrEncoder2() { countTick(1, ENC2_PIN_B, ENCODER2_INVERTED); }
-void isrEncoder3() { countTick(2, ENC3_PIN_B, ENCODER3_INVERTED); }
-void isrEncoder4() { countTick(3, ENC4_PIN_B, ENCODER4_INVERTED); }
-
-void attachEncoder(uint8_t index, uint8_t pinA, uint8_t pinB, void (*isr)()) {
-  pinMode(pinA, INPUT_PULLUP);
-  pinMode(pinB, INPUT_PULLUP);
+void attachEncoderInterrupt(uint8_t index, uint8_t pinA, void (*isrFunc)()) {
   const int intNum = digitalPinToInterrupt(pinA);
-  if (intNum == NOT_AN_INTERRUPT) {
+  if (intNum != NOT_AN_INTERRUPT) {
+    attachInterrupt(intNum, isrFunc, RISING);
+  } else {
     Serial.print(F("[ERROR ENCODER] Pin sin interrupcion (Enc"));
     Serial.print(index);
     Serial.print(F("): "));
     Serial.println(pinA);
-    return;
   }
-  attachInterrupt(intNum, isr, RISING);
 }
 }
 
@@ -44,14 +63,24 @@ void EncoderManager::begin() {
     rpm_[i] = 0.0f;
   }
   noInterrupts();
-  for (uint8_t i = 0; i < 4; ++i) encoderTicks[i] = 0;
+  enc1_ticks = enc2_ticks = enc3_ticks = enc4_ticks = 0;
   interrupts();
   lastSampleMs_ = millis();
 
-  attachEncoder(1, ENC1_PIN_A, ENC1_PIN_B, isrEncoder1);
-  attachEncoder(2, ENC2_PIN_A, ENC2_PIN_B, isrEncoder2);
-  attachEncoder(3, ENC3_PIN_A, ENC3_PIN_B, isrEncoder3);
-  attachEncoder(4, ENC4_PIN_A, ENC4_PIN_B, isrEncoder4);
+  pinMode(ENC1_PIN_A, INPUT_PULLUP); pinMode(ENC1_PIN_B, INPUT_PULLUP);
+  pinMode(ENC2_PIN_A, INPUT_PULLUP); pinMode(ENC2_PIN_B, INPUT_PULLUP);
+  pinMode(ENC3_PIN_A, INPUT_PULLUP); pinMode(ENC3_PIN_B, INPUT_PULLUP);
+  pinMode(ENC4_PIN_A, INPUT_PULLUP); pinMode(ENC4_PIN_B, INPUT_PULLUP);
+
+  attachEncoderInterrupt(1, ENC1_PIN_A, isrEncoder1);
+  attachEncoderInterrupt(2, ENC2_PIN_A, isrEncoder2);
+  attachEncoderInterrupt(3, ENC3_PIN_A, isrEncoder3);
+  attachEncoderInterrupt(4, ENC4_PIN_A, isrEncoder4);
+
+  Serial.print(F("[ENCODER SETUP] Enc1(Pin ")); Serial.print(ENC1_PIN_A); Serial.print(F(")->Int:")); Serial.println(digitalPinToInterrupt(ENC1_PIN_A));
+  Serial.print(F("[ENCODER SETUP] Enc2(Pin ")); Serial.print(ENC2_PIN_A); Serial.print(F(")->Int:")); Serial.println(digitalPinToInterrupt(ENC2_PIN_A));
+  Serial.print(F("[ENCODER SETUP] Enc3(Pin ")); Serial.print(ENC3_PIN_A); Serial.print(F(")->Int:")); Serial.println(digitalPinToInterrupt(ENC3_PIN_A));
+  Serial.print(F("[ENCODER SETUP] Enc4(Pin ")); Serial.print(ENC4_PIN_A); Serial.print(F(")->Int:")); Serial.println(digitalPinToInterrupt(ENC4_PIN_A));
 }
 
 void EncoderManager::update() {
@@ -60,11 +89,9 @@ void EncoderManager::update() {
   if (elapsedMs < ENCODER_RPM_SAMPLE_MS) return;
 
   int32_t currentTicks[4];
-  noInterrupts();
   for (uint8_t motor = 0; motor < 4; ++motor) {
-    currentTicks[motor] = encoderTicks[motor];
+    currentTicks[motor] = readTicksAtomic(motor);
   }
-  interrupts();
 
   for (uint8_t motor = 0; motor < 4; ++motor) {
     const float ticksPerRev = ticksPerOutputRev(motor);
@@ -82,16 +109,13 @@ void EncoderManager::update() {
 
 int32_t EncoderManager::getTicks(uint8_t motorIdx) const {
   if (motorIdx >= 4) return 0;
-  noInterrupts();
-  const int32_t ticks = encoderTicks[motorIdx];
-  interrupts();
-  return ticks;
+  return readTicksAtomic(motorIdx);
 }
 
 void EncoderManager::resetTicks() {
   noInterrupts();
+  enc1_ticks = enc2_ticks = enc3_ticks = enc4_ticks = 0;
   for (uint8_t i = 0; i < 4; ++i) {
-    encoderTicks[i] = 0;
     sampleTicks_[i] = 0;
     rpm_[i] = 0.0f;
   }

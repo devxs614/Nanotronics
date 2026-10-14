@@ -1,5 +1,26 @@
 #include "ColorSensor.h"
 
+namespace {
+// Layout guardado en la EEPROM (direccion 0) por tests_2.0/09_test_color_calibration_eeprom.cpp
+constexpr uint32_t kCalibMagic = 0x434C5233UL;  // "CLR3"
+
+struct StoredSignature {
+  uint16_t r, g, b, c;
+  float rn, gn, bn;
+  float threshold;
+  uint8_t valid;
+};
+
+struct StoredCalibration {
+  uint32_t magic;
+  StoredSignature colors[ColorSensor::PROFILE_COUNT];
+};
+
+const char* const kShortNames[ColorSensor::PROFILE_COUNT] = {
+  "Cian", "Amar", "Naran", "Rosa", "Rojo", "Verde", "Piso"
+};
+}  // namespace
+
 void ColorSensor::begin() {
   selectI2CChannel(MUX_CH_COLOR);
   pinMode(TCS_POWER, OUTPUT);
@@ -10,23 +31,161 @@ void ColorSensor::begin() {
 
   candidateColor_ = robot::ColorClass::COLOR_NONE;
   consistentSamples_ = 0;
+  currentSlot_ = SLOT_NONE;
+  candidateSlot_ = SLOT_NONE;
   latestReading.r = latestReading.g = latestReading.b = latestReading.c = 0;
   latestReading.rn = latestReading.gn = latestReading.bn = 0.0f;
   latestReading.color = initialized_
     ? robot::ColorClass::COLOR_NONE : robot::ColorClass::COLOR_UNKNOWN;
   latestReading.confidence = 0.0f;
+
+  loadCalibration();
 }
 
+void ColorSensor::loadCalibration() {
+  memset(&calibrationData_, 0, sizeof(calibrationData_));
+
+  // 1) Formato escrito por el test 09 (codigo de verificacion + firmas por color)
+  StoredCalibration stored;
+  EEPROM.get(0, stored);
+  if (stored.magic == kCalibMagic) {
+    robot::ColorProfile* out[PROFILE_COUNT] = {
+      &calibrationData_.cian, &calibrationData_.amarillo, &calibrationData_.naranja,
+      &calibrationData_.rosa, &calibrationData_.rojo, &calibrationData_.verde,
+      &calibrationData_.piso
+    };
+    for (uint8_t i = 0; i < PROFILE_COUNT; ++i) {
+      if (stored.colors[i].valid != 1) continue;
+      out[i]->rNorm = stored.colors[i].rn;
+      out[i]->gNorm = stored.colors[i].gn;
+      out[i]->bNorm = stored.colors[i].bn;
+      out[i]->clearRaw = stored.colors[i].c;
+      calibrationData_.isCalibrated = true;
+    }
+    return;
+  }
+
+  // 2) Estructura ColorCalibrationData directa en la direccion 0
+  EEPROM.get(0, calibrationData_);
+  calibrationData_.isCalibrated = false;
+  if (calibrationData_.cian.rNorm + calibrationData_.cian.gNorm > 0.1f) {
+    bool sane = true;  // EEPROM vacia (0xFF) o datos ajenos producen NaN / valores fuera de [0, 1]
+    for (uint8_t i = 0; i < PROFILE_COUNT; ++i) {
+      const robot::ColorProfile& p = profile(i);
+      if (!(p.rNorm >= 0.0f && p.rNorm <= 1.0f && p.gNorm >= 0.0f && p.gNorm <= 1.0f &&
+            p.bNorm >= 0.0f && p.bNorm <= 1.0f)) {
+        sane = false;
+        break;
+      }
+    }
+    calibrationData_.isCalibrated = sane;
+  }
+  if (!calibrationData_.isCalibrated) memset(&calibrationData_, 0, sizeof(calibrationData_));
+}
+
+const robot::ColorProfile& ColorSensor::profile(uint8_t slot) const {
+  switch (slot) {
+    case SLOT_CYAN:   return calibrationData_.cian;
+    case SLOT_YELLOW: return calibrationData_.amarillo;
+    case SLOT_ORANGE: return calibrationData_.naranja;
+    case SLOT_PINK:   return calibrationData_.rosa;
+    case SLOT_RED:    return calibrationData_.rojo;
+    case SLOT_GREEN:  return calibrationData_.verde;
+    default:          return calibrationData_.piso;
+  }
+}
+
+int8_t ColorSensor::slotFromClass(robot::ColorClass c) {
+  switch (c) {
+    case robot::ColorClass::COLOR_CYAN:   return SLOT_CYAN;
+    case robot::ColorClass::COLOR_YELLOW: return SLOT_YELLOW;
+    case robot::ColorClass::COLOR_ORANGE: return SLOT_ORANGE;
+    case robot::ColorClass::COLOR_PINK:   return SLOT_PINK;
+    case robot::ColorClass::COLOR_RED:    return SLOT_RED;
+    case robot::ColorClass::COLOR_NONE:   return SLOT_NONE;
+    default:                              return SLOT_UNKNOWN;
+  }
+}
+
+robot::ColorClass ColorSensor::classFromSlot(int8_t slot) {
+  switch (slot) {
+    case SLOT_CYAN:   return robot::ColorClass::COLOR_CYAN;
+    case SLOT_YELLOW: return robot::ColorClass::COLOR_YELLOW;
+    case SLOT_ORANGE: return robot::ColorClass::COLOR_ORANGE;
+    case SLOT_PINK:   return robot::ColorClass::COLOR_PINK;
+    case SLOT_RED:    return robot::ColorClass::COLOR_RED;
+    case SLOT_FLOOR:
+    case SLOT_NONE:   return robot::ColorClass::COLOR_NONE;
+    default:          return robot::ColorClass::COLOR_UNKNOWN;  // Verde y desconocido
+  }
+}
+
+const char* ColorSensor::getColorName() const {
+  if (currentSlot_ >= 0 && currentSlot_ < PROFILE_COUNT) return kShortNames[currentSlot_];
+  if (currentSlot_ == SLOT_NONE) return "---";
+  return "Desc";
+}
+
+// Vecino mas cercano: distancia euclidiana en RGB normalizado + peso del brillo (Clear)
+int8_t ColorSensor::classifyCalibrated() {
+  const float sum = static_cast<float>(latestReading.r) + latestReading.g + latestReading.b;
+  latestReading.confidence = 0.0f;
+  if (sum <= 0.0f) return SLOT_UNKNOWN;
+
+  const float rn = static_cast<float>(latestReading.r) / sum;
+  const float gn = static_cast<float>(latestReading.g) / sum;
+  const float bn = static_cast<float>(latestReading.b) / sum;
+  const int c = static_cast<int>(latestReading.c);
+
+  auto calcDist = [&](const robot::ColorProfile& p) -> float {
+    const float dRGB = sqrt(sq(rn - p.rNorm) + sq(gn - p.gNorm) + sq(bn - p.bNorm));
+    const float dClear = abs(c - static_cast<int>(p.clearRaw)) * 0.002f;
+    return dRGB + dClear;
+  };
+
+  int8_t best = SLOT_UNKNOWN;
+  float bestDist = 1.0e9f;
+  for (uint8_t i = 0; i < PROFILE_COUNT; ++i) {
+    const robot::ColorProfile& p = profile(i);
+    if (p.rNorm + p.gNorm + p.bNorm <= 0.0f) continue;  // Perfil sin muestra
+    const float d = calcDist(p);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  if (best != SLOT_UNKNOWN) latestReading.confidence = 1.0f;
+  return best;
+}
 void ColorSensor::update() {
   selectI2CChannel(MUX_CH_COLOR);
   if (!initialized_) {
     latestReading.color = robot::ColorClass::COLOR_UNKNOWN;
     latestReading.confidence = 0.0f;
+    currentSlot_ = SLOT_UNKNOWN;
     return;
   }
 
   readRaw();
   calculateNormalizedRGB();
+
+  if (calibrationData_.isCalibrated) {
+    const int8_t sample = classifyCalibrated();
+    if (sample == candidateSlot_) {
+      if (consistentSamples_ < COLOR_CONFIRM_SAMPLES) ++consistentSamples_;
+      if (consistentSamples_ >= COLOR_CONFIRM_SAMPLES) {
+        currentSlot_ = sample;
+        latestReading.color = classFromSlot(sample);
+      }
+    } else {
+      candidateSlot_ = sample;
+      consistentSamples_ = 1;
+      currentSlot_ = SLOT_UNKNOWN;
+      latestReading.color = robot::ColorClass::COLOR_UNKNOWN;
+    }
+    return;
+  }
+
   const robot::ColorClass sample = calculateColorClassification();
   if (!isValidColorSample()) {
     candidateColor_ = robot::ColorClass::COLOR_NONE;
@@ -40,6 +199,7 @@ void ColorSensor::update() {
     consistentSamples_ = 1;
     latestReading.color = robot::ColorClass::COLOR_UNKNOWN;
   }
+  currentSlot_ = slotFromClass(latestReading.color);
 }
 
 void ColorSensor::readRaw() {

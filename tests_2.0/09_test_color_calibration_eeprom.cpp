@@ -14,12 +14,13 @@ enum ColorSlot : uint8_t {
   SLOT_ORANGE,
   SLOT_PINK,
   SLOT_RED,
+  SLOT_GREEN,
   SLOT_FLOOR,
   SLOT_COUNT
 };
 
 static const char* const kSlotNames[SLOT_COUNT] = {
-  "Cian", "Amarillo", "Naranja", "Rosa", "Rojo", "Piso"
+  "Cian", "Amarillo", "Naranja", "Rosa", "Rojo", "Verde", "Piso"
 };
 
 struct ColorSignature {
@@ -34,7 +35,7 @@ struct ColorCalibrationData {
   ColorSignature colors[SLOT_COUNT];
 };
 
-constexpr uint32_t CALIB_MAGIC = 0x434C5232UL;  // "CLR2"
+constexpr uint32_t CALIB_MAGIC = 0x434C5233UL;  // "CLR3" (7 clases)
 constexpr int EEPROM_ADDR = 0;
 constexpr uint8_t SAMPLES_PER_CAPTURE = 10;
 
@@ -197,7 +198,8 @@ static void showMenu() {
   Serial.println(F(" TEST 09: CALIBRACION DE COLOR (TCS34725 + EEPROM)"));
   Serial.println(F("=============================================="));
   Serial.println(F("  'c' CIAN  'y' AMARILLO  'o' NARANJA"));
-  Serial.println(F("  'p' ROSA  'r' ROJO      'f' PISO"));
+  Serial.println(F("  'p' ROSA  'r' ROJO      'v' VERDE (Inicio)"));
+  Serial.println(F("  'f' PISO"));
   Serial.println(F("  'w' guardar en EEPROM   'l' leer de EEPROM"));
   Serial.println(F("  'm' menu\n"));
 }
@@ -226,7 +228,7 @@ static void renderOled() {
   display.print(detectedName());
 
   display.setCursor(0, 48);
-  display.print(F("Cmd:cyoprf w:Save"));
+  display.print(F("Cmd:c,y,o,p,r,v,f|w:Save"));
   display.display();
 }
 
@@ -268,6 +270,7 @@ void loop() {
       case 'o': case 'O': captureSample(SLOT_ORANGE); break;
       case 'p': case 'P': captureSample(SLOT_PINK);   break;
       case 'r': case 'R': captureSample(SLOT_RED);    break;
+      case 'v': case 'V': captureSample(SLOT_GREEN);  break;
       case 'f': case 'F': captureSample(SLOT_FLOOR);  break;
       case 'w': case 'W': saveToEeprom();             break;
       case 'l': case 'L': loadFromEeprom();           break;

@@ -84,10 +84,17 @@ void MotorController::stopAll() {
 }
 
 void MotorController::setSpeeds(int16_t m1, int16_t m2, int16_t m3, int16_t m4) {
-  setMotorPWM(0, m1);
-  setMotorPWM(1, m2);
-  setMotorPWM(2, m3);
-  setMotorPWM(3, m4);
+  const int16_t speeds[4] = {m1, m2, m3, m4};
+  for (uint8_t motor = 0; motor < 4; ++motor) {
+    if (speeds[motor] == 0) {
+      targetPWM[motor] = 0;
+      currentPWM[motor] = 0;
+      analogWrite(motorPins_[motor][0], 0);
+      setMotorDirection(motor, MotorDirection::COAST);
+    } else {
+      setMotorPWM(motor, speeds[motor]);
+    }
+  }
 }
 
 void MotorController::stop() {

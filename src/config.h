@@ -183,10 +183,6 @@ constexpr uint8_t VL53_LEFT_ADDRESS = 0x32;
 #define ENCODER4_INVERTED true
 
 // --- PINES CORREGIDOS ---
-#define DISTANCE_FRONT_XSHUT 24
-#define DISTANCE_RIGHT_XSHUT 22
-#define DISTANCE_LEFT_XSHUT 26
-
 #define TCS_POWER 28
 
 #define MOTOR1_PWM_PIN 6
@@ -202,24 +198,15 @@ constexpr uint8_t VL53_LEFT_ADDRESS = 0x32;
 #define MOTOR4_BIN1 37
 #define MOTOR4_BIN2 38
 
-#define ENCODER1_A 2
-#define ENCODER1_B 11
-#define ENCODER2_A 3
-#define ENCODER2_B 13
-#define ENCODER3_A 18
-#define ENCODER3_B 15
-#define ENCODER4_A 19
-#define ENCODER4_B 23
-
-// Alias para nombres de pines ENC*_PIN_* (Mega 2560: Pines 2, 3, 18, 19 con interrupción por hardware)
-#define ENC1_PIN_A ENCODER1_A
-#define ENC1_PIN_B ENCODER1_B
-#define ENC2_PIN_A ENCODER2_A
-#define ENC2_PIN_B ENCODER2_B
-#define ENC3_PIN_A ENCODER3_A
-#define ENC3_PIN_B ENCODER3_B
-#define ENC4_PIN_A ENCODER4_A
-#define ENC4_PIN_B ENCODER4_B
+// Pines de encoders (Mega 2560: canales A en 2, 3, 18, 19 con interrupción por hardware)
+#define ENC1_PIN_A 2
+#define ENC1_PIN_B 11
+#define ENC2_PIN_A 3
+#define ENC2_PIN_B 13
+#define ENC3_PIN_A 18
+#define ENC3_PIN_B 15
+#define ENC4_PIN_A 19
+#define ENC4_PIN_B 17
 
 #define GRIPPER_SERVO_PIN 5
 #define QTR_SENSOR_PIN_BASE A0
