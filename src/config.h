@@ -14,13 +14,26 @@ inline void selectI2CChannel(uint8_t channel) {
 }
 
 #define MUX_CH_IMU 0
-#define IMU_MUX_CHANNEL MUX_CH_IMU
-#define MPU6050_I2C_ADDR 0x68
 #define MUX_CH_COLOR 1
 #define MUX_CH_FRONT 2
 #define MUX_CH_RIGHT 3
 #define MUX_CH_LEFT 4
 #define MUX_CH_OLED 5
+
+// Odometría y Dimensiones de Celda
+constexpr float CELL_MM = 280.0f;               // 28 cm reales por casilla
+
+// Geometría y Umbrales de Pared
+constexpr uint16_t UMBRAL_PARED_MM = 150;       // Pared si d < 150 mm
+constexpr uint16_t SETPOINT_LATERAL_MM = 45;    // Margen de 4.5 cm centrado
+
+// Constantes de Calibración IMU (MPU6050)
+constexpr uint8_t IMU_MUX_CHANNEL = 0;
+constexpr uint8_t MPU6050_I2C_ADDR = 0x68;
+constexpr float GYRO_LSB_PER_DPS = 16.4f;       // Configuración +-2000 dps (0x1B = 0x18)
+constexpr float IMU_SCALE_FACTOR = 9.4235f;     // Factor de ganancia empírico (360° test)
+constexpr int16_t TURN_BASE_PWM = 50;           // PWM base para giros de 90°
+constexpr int16_t TURN_SLOW_PWM = 30;           // PWM de desaceleración final
 
 #define DEBUG_ENABLED true
 #ifndef COMPETITION_MODE

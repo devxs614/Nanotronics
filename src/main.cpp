@@ -25,6 +25,7 @@
 #include "Odometry.h"
 #include "SensorFusion.h"
 #include "CalibrationManager.h"
+#include "Navigator.h"
 
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 Adafruit_VL53L0X frontSensor;
@@ -96,10 +97,10 @@ float gyroBiasZ = 0.0f;
 uint32_t lastImuUs = 0;
 
 constexpr uint8_t REG_PWR_MGMT_1 = 0x6B;
+constexpr uint8_t REG_GYRO_CONFIG = 0x1B;
 constexpr uint8_t REG_WHO_AM_I = 0x75;
 constexpr uint8_t REG_ACCEL_XOUT_H = 0x3B;
 constexpr float ACCEL_LSB_PER_G = 16384.0f;
-constexpr float GYRO_LSB_PER_DPS = 131.0f;
 
 bool i2cPing(uint8_t addr) {
   Wire.beginTransmission(addr);
@@ -146,6 +147,7 @@ void scanMuxForImu() {
 
       uint8_t who = 0;
       readRegisters(addr, REG_WHO_AM_I, &who, 1);
+      writeRegister(addr, REG_GYRO_CONFIG, 0x18);  // +-2000 dps (16.4 LSB/dps)
       writeRegister(addr, REG_PWR_MGMT_1, 0x00);
       delay(10);
 
@@ -180,6 +182,69 @@ void calibrateGyroBias() {
   if (ok > 0) gyroBiasZ = sum / ok;
   Serial.print(F("Bias gyro Z (dps): "));
   Serial.println(gyroBiasZ, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Utilidades de hardware compartidas con Navigator (yaw, odometria, OLED)
+// ---------------------------------------------------------------------------
+Navigator navigator;
+float odometryMm = 0.0f;
+
+float wrap180(float angle) {
+  while (angle > 180.0f) angle -= 360.0f;
+  while (angle < -180.0f) angle += 360.0f;
+  return angle;
+}
+
+// Integra el yaw con la IMU; devuelve el delta en grados (0 si no hubo lectura valida)
+float updateYaw() {
+  if (!imuFound) return 0.0f;
+  int16_t ax, ay, az, gx, gy, gz;
+  if (!readImuRaw(ax, ay, az, gx, gy, gz)) return 0.0f;
+  const uint32_t nowUs = micros();
+  const float dt = (nowUs - lastImuUs) / 1000000.0f;
+  lastImuUs = nowUs;
+  if (dt <= 0.0f || dt >= 0.25f) return 0.0f;
+  const float delta = ((gz / GYRO_LSB_PER_DPS) - gyroBiasZ) * IMU_SCALE_FACTOR * dt;
+  yawDeg = wrap180(yawDeg + delta);
+  return delta;
+}
+
+float readOdometryMm() {
+  float sum = 0.0f;
+  for (uint8_t i = 0; i < 4; i++) sum += fabs(static_cast<float>(encoderManager.getTicks(i)));
+  return (sum / 4.0f) / TICKS_PER_MM;
+}
+
+bool isWallFree(uint16_t dist) {
+  return dist == 0 || dist >= UMBRAL_PARED_MM;
+}
+
+// OLED (Canal 5): YAW|Color, distancias F/L/R, estado de paredes y odometria
+void renderNavOled(uint16_t f, uint16_t l, uint16_t r, const char* colorName) {
+  char line[24];
+  selectI2CChannel(5);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  snprintf(line, sizeof(line), "YAW:%d | %.10s", static_cast<int>(yawDeg), colorName);
+  display.setCursor(0, 0);
+  display.print(line);
+
+  snprintf(line, sizeof(line), "F:%u L:%u R:%u", f, l, r);
+  display.setCursor(0, 16);
+  display.print(line);
+
+  snprintf(line, sizeof(line), "F:%c L:%c R:%c", isWallFree(f) ? 'L' : 'B',
+           isWallFree(l) ? 'L' : 'B', isWallFree(r) ? 'L' : 'B');
+  display.setCursor(0, 32);
+  display.print(line);
+
+  snprintf(line, sizeof(line), "ODO: %d mm", static_cast<int>(odometryMm));
+  display.setCursor(0, 48);
+  display.print(line);
+  display.display();
 }
 
 void setup() {
@@ -236,14 +301,14 @@ void setup() {
   fOk = initVL53L0XWithRetry(frontSensor, 2, "Frontal");
   delay(50);
 
-  // Canal 3 (Derecho)
-  Serial.print(F("Probando Canal 3 (Derecho)... "));
-  rOk = initVL53L0XWithRetry(rightSensor, 3, "Derecho");
+  // Canal 3 (Izquierdo)
+  Serial.print(F("Probando Canal 3 (Izquierdo)... "));
+  lOk = initVL53L0XWithRetry(leftSensor, 3, "Izquierdo");
   delay(50);
 
-  // Canal 4 (Izquierdo)
-  Serial.print(F("Probando Canal 4 (Izquierdo)... "));
-  lOk = initVL53L0XWithRetry(leftSensor, 4, "Izquierdo");
+  // Canal 4 (Derecho)
+  Serial.print(F("Probando Canal 4 (Derecho)... "));
+  rOk = initVL53L0XWithRetry(rightSensor, 4, "Derecho");
   delay(50);
   frontOk = fOk;
   rightOk = rOk;
@@ -291,6 +356,7 @@ void setup() {
                                &lineSensor, &gripperController);
   diagnostics.begin();
   visionInterface.begin();
+  navigator.begin();
 
   Serial.println(F("Robot initialized successfully"));
 
@@ -312,6 +378,23 @@ void loop() {
   static uint16_t distL = 0;
   static char yawStr[8] = "--";
   const uint32_t now = millis();
+
+  // Comandos Serial: 'g' inicia la navegacion, 's' detiene
+  while (Serial.available() > 0) {
+    const char cmd = Serial.read();
+    if (cmd == 'g' || cmd == 'G') {
+      navigator.start();
+    } else if (cmd == 's' || cmd == 'S') {
+      navigator.stop();
+      Serial.println(F("[MOTORES DETENIDOS]"));
+    }
+  }
+
+  // Navegando: la FSM controla motores, sensores y OLED
+  if (navigator.isRunning()) {
+    navigator.update();
+    return;
+  }
 
   // 1. Actualización rápida de Encoders y Odometría
   if (now - lastFastUpdateMs >= FAST_SENSOR_UPDATE_MS) {
@@ -335,30 +418,19 @@ void loop() {
     delay(2);
     distF = frontSensor.readRange();
 
-    // Canal 3: Derecho
+    // Canal 3: Izquierdo
     selectI2CChannel(3);
-    delay(2);
-    distR = rightSensor.readRange();
-
-    // Canal 4: Izquierdo
-    selectI2CChannel(4);
     delay(2);
     distL = leftSensor.readRange();
 
+    // Canal 4: Derecho
+    selectI2CChannel(4);
+    delay(2);
+    distR = rightSensor.readRange();
+
     // IMU por registros raw (canal detectado por el escaneo; N/A si no responde)
     if (imuFound) {
-      int16_t ax, ay, az, gx, gy, gz;
-      if (readImuRaw(ax, ay, az, gx, gy, gz)) {
-        const uint32_t nowUs = micros();
-        const float dt = (nowUs - lastImuUs) / 1000000.0f;
-        lastImuUs = nowUs;
-        if (dt > 0.0f && dt < 0.25f) {
-          const float gzd = gz / GYRO_LSB_PER_DPS - gyroBiasZ;
-          yawDeg += gzd * dt;
-          if (yawDeg > 180.0f) yawDeg -= 360.0f;
-          else if (yawDeg < -180.0f) yawDeg += 360.0f;
-        }
-      }
+      updateYaw();
       snprintf(yawStr, sizeof(yawStr), "%d", static_cast<int>(yawDeg));
     } else {
       strcpy(yawStr, "--");
@@ -386,22 +458,14 @@ void loop() {
   if (visionInterface.consumeNewMarker(markerId)) displayManager.showArUco(markerId);
 
   // 4. Control de Motores (Actualización continua sin bloqueo)
-  mecanumDrive.driveForward(100.0f);
-  mecanumDrive.update();
   motorController.update();
 
   // 5. Refresco de Pantalla OLED (Canal 5) cada 150 ms
   if (oledOk && (now - lastOledMs >= 150UL)) {
     lastOledMs = now;
 
-    selectI2CChannel(5);
-    delay(2);
-
-    DisplayManager::renderTelemetryTo(display, filteredF, filteredL, filteredR,
-                                      color.latestReading.r, color.latestReading.g,
-                                      color.latestReading.b, yawStr,
-                                      color.getColorName(),
-                                      motorController.currentPWM);
+    odometryMm = readOdometryMm();
+    renderNavOled(filteredF, filteredL, filteredR, color.getColorName());
   }
 
   // 6. Reporte estructurado y limpio por Monitor Serie cada 200 ms
