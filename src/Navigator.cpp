@@ -41,21 +41,18 @@ constexpr int16_t NAV_DECEL_END_PWM = 80;
 constexpr int16_t NAV_BRAKE_PWM = 80;
 constexpr uint32_t NAV_BRAKE_MS = 30UL;
 constexpr uint16_t NAV_STOP_FRONT_MM = 35;
-constexpr float NAV_IMU_KP = 5.5f;
-constexpr float NAV_IMU_KD = 1.5f;
-constexpr float NAV_LASER_WEIGHT = 0.08f;
+constexpr float NAV_YAW_LOCK_KP = 3.0f;
 constexpr float NAV_CORR_LIMIT = 40.0f;
 constexpr float NAV_MAX_YAW_ABORT_DEG = 30.0f;
-constexpr uint32_t NAV_CONTROL_PERIOD_MS = 40UL;
 constexpr uint32_t NAV_TIMEOUT_MS = 8000UL;
 
-constexpr float TURN_SLOW_ZONE_DEG = 20.0f;
-constexpr int16_t TURN_START_PWM = 125;
-constexpr int16_t NAV_TURN_SLOW_PWM = 45;
-constexpr int16_t TURN_BRAKE_PWM = 60;
-constexpr uint32_t TURN_BRAKE_MS = 25UL;
-constexpr uint32_t TURN_SETTLE_MS = 40UL;
-constexpr uint32_t TURN_TIMEOUT_MS = 2500UL;
+// Parametros validados en el test de giros IMU.
+constexpr int16_t TURN_PWM = 50;
+constexpr int16_t SLOW_PWM = 30;
+constexpr int16_t BRAKE_PWM = 45;
+constexpr float SLOW_ZONE_DEG = 15.0f;
+constexpr uint32_t BRAKE_MS = 35UL;
+constexpr uint32_t TURN_TIMEOUT_MS = 6000UL;
 constexpr uint8_t I2C_MUX_ADDRESS = 0x70;
 
 struct CellStatus {
@@ -155,7 +152,7 @@ void reverseBrake(const int16_t speeds[4], uint32_t durationMs) {
   motorController.stop();
 }
 
-// Avanza una celda (280 mm) con yaw lock IMU + ajuste suave por laseres.
+// Avanza una celda (280 mm) con yaw lock IMU proporcional.
 // Un fallo recuperable devuelve false para volver a SCAN; nunca detiene la FSM.
 bool advanceOneCell() {
   if (!imuFound) {
@@ -177,12 +174,10 @@ bool advanceOneCell() {
 
   Serial.print(F("\n[AVANCE] 1 celda ("));
   Serial.print(CELL_MM, 0);
-  Serial.println(F(" mm), IMU yaw lock + laser"));
+  Serial.println(F(" mm), IMU yaw lock"));
 
   const uint32_t startMs = millis();
-  uint32_t lastControlMs = 0;
   uint32_t lastLogMs = 0;
-  float lastImuError = 0.0f;
   bool activeBrake = true;
   bool completed = true;
   int16_t currentBaseSpeed = NAV_BASE_PWM;
@@ -217,8 +212,8 @@ bool advanceOneCell() {
       break;
     }
 
-    const float imuError = wrap180(yawDeg - targetYaw);
-    if (fabs(imuError) > NAV_MAX_YAW_ABORT_DEG) {
+    const float yawError = wrap180(yawDeg - targetYaw);
+    if (fabs(yawError) > NAV_MAX_YAW_ABORT_DEG) {
       reason = F("Rumbo fuera de limite");
       completed = false;
       resetMuxChannel(MUX_CH_IMU);
@@ -235,25 +230,12 @@ bool advanceOneCell() {
       currentBaseSpeed = NAV_BASE_PWM;
     }
 
-    if (now - lastControlMs >= NAV_CONTROL_PERIOD_MS) {
-      lastControlMs = now;
-
-      // El laser solo ayuda con dos paredes; con un hueco lateral se ignora
-      const bool wallL = (dL > 0 && dL < UMBRAL_PARED_MM);
-      const bool wallR = (dR > 0 && dR < UMBRAL_PARED_MM);
-      float laserError = 0.0f;
-      if (wallL && wallR) laserError = (static_cast<float>(dL) - static_cast<float>(dR)) * NAV_LASER_WEIGHT;
-
-      const float dImuError = imuError - lastImuError;
-      lastImuError = imuError;
-
-      float correction = (imuError * NAV_IMU_KP) + (dImuError * NAV_IMU_KD) + laserError;
-      correction = constrain(correction, -NAV_CORR_LIMIT, NAV_CORR_LIMIT);
-
-      const int16_t left = constrain(currentBaseSpeed - static_cast<int16_t>(correction), 0, 255);
-      const int16_t right = constrain(currentBaseSpeed + static_cast<int16_t>(correction), 0, 255);
-      motorController.setSpeeds(left, right, left, right);
-    }
+    // Cada muestra fresca del gyro corrige los dos lados de forma diferencial.
+    float correction = NAV_YAW_LOCK_KP * yawError;
+    correction = constrain(correction, -NAV_CORR_LIMIT, NAV_CORR_LIMIT);
+    const int16_t leftPwm = constrain(currentBaseSpeed - static_cast<int16_t>(correction), 0, 255);
+    const int16_t rightPwm = constrain(currentBaseSpeed + static_cast<int16_t>(correction), 0, 255);
+    motorController.setSpeeds(leftPwm, rightPwm, leftPwm, rightPwm);
     motorController.update();
 
     if (now - lastLogMs >= 100UL) {
@@ -310,11 +292,9 @@ Navigator::Navigator()
       turnStartedMs_(0),
       turnLastUs_(0),
       brakeStartedMs_(0),
-      settleStartedMs_(0),
       turnActive_(false),
       turnSlowed_(false),
-      turnBraking_(false),
-      turnSettling_(false) {
+      turnBraking_(false) {
   memset(&redProfile, 0, sizeof(redProfile));
   strcpy(currentColorName, "Desc");
 }
@@ -326,7 +306,6 @@ void Navigator::begin() {
   turnActive_ = false;
   turnSlowed_ = false;
   turnBraking_ = false;
-  turnSettling_ = false;
 
   // El sesgo se fija antes de activar la FSM para que los giros y el yaw-lock
   // compartan una sola referencia de gyro Z desde el arranque.
@@ -413,19 +392,19 @@ void Navigator::turn90(bool turnLeft, float targetDegrees) {
 
   motorController.stop();
   selectI2CChannel(MUX_CH_IMU);
-  delayMicroseconds(300);
+  delay(2);
   turnedAngle_ = 0.0f;
   turnTargetDegrees_ = targetDegrees;
-  turnDirection_ = turnLeft ? -1 : 1;
+  // +1 genera (-,+,-,+): M1/M3 atras, M2/M4 adelante (izquierda).
+  // -1 genera (+,-,+,-): patron inverso para derecha.
+  turnDirection_ = turnLeft ? 1 : -1;
   turnStartedMs_ = millis();
   turnLastUs_ = micros();
   turnActive_ = true;
   turnSlowed_ = false;
   turnBraking_ = false;
-  turnSettling_ = false;
 
-  // Convencion mecanica validada: izquierda usa PWM negativo y derecha positivo.
-  const int16_t pwm = turnDirection_ * TURN_START_PWM;
+  const int16_t pwm = turnDirection_ * TURN_PWM;
   motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
   Serial.print(F("[GIRO] Inicio "));
   Serial.print(turnLeft ? F("IZQUIERDA ") : F("DERECHA "));
@@ -434,8 +413,8 @@ void Navigator::turn90(bool turnLeft, float targetDegrees) {
 }
 
 void Navigator::beginTurnBrake() {
-  // Invierte la polaridad durante 25 ms para contrarrestar la inercia sin bloquear loop().
-  const int16_t pwm = -turnDirection_ * TURN_BRAKE_PWM;
+  // Pulso inverso de 35 ms: replica el micro-freno activo del test validado.
+  const int16_t pwm = -turnDirection_ * BRAKE_PWM;
   const int16_t brake[4] = {-pwm, pwm, -pwm, pwm};
   for (uint8_t motor = 0; motor < 4; ++motor) motorController.currentPWM[motor] = brake[motor];
   motorController.setSpeeds(brake[0], brake[1], brake[2], brake[3]);
@@ -449,18 +428,10 @@ Navigator::TurnResult Navigator::updateTurn() {
 
   if (turnBraking_) {
     motorController.update();
-    if (millis() - brakeStartedMs_ < TURN_BRAKE_MS) return TurnResult::IN_PROGRESS;
+    if (millis() - brakeStartedMs_ < BRAKE_MS) return TurnResult::IN_PROGRESS;
     motorController.stop();
     turnBraking_ = false;
-    turnSettling_ = true;
-    settleStartedMs_ = millis();
-    return TurnResult::IN_PROGRESS;
-  }
-
-  if (turnSettling_) {
-    if (millis() - settleStartedMs_ < TURN_SETTLE_MS) return TurnResult::IN_PROGRESS;
     turnActive_ = false;
-    turnSettling_ = false;
     lastImuUs = micros();
     Serial.print(F("[GIRO] Completado: "));
     Serial.print(turnedAngle_, 1);
@@ -496,9 +467,9 @@ Navigator::TurnResult Navigator::updateTurn() {
     }
   }
 
-  if (!turnSlowed_ && turnedAngle_ >= turnTargetDegrees_ - TURN_SLOW_ZONE_DEG) {
+  if (!turnSlowed_ && turnedAngle_ >= turnTargetDegrees_ - SLOW_ZONE_DEG) {
     turnSlowed_ = true;
-    const int16_t pwm = turnDirection_ * NAV_TURN_SLOW_PWM;
+    const int16_t pwm = turnDirection_ * SLOW_PWM;
     motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
   }
 
