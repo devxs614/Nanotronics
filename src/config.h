@@ -27,7 +27,7 @@ inline void selectI2CChannel(uint8_t channel) {
     Wire.write(static_cast<uint8_t>(1U << channel));
     Wire.endTransmission();
   }
-  delayMicroseconds(300);
+  delayMicroseconds(200);
 }
 
 #define MUX_CH_IMU 0

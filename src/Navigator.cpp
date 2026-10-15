@@ -20,6 +20,9 @@ extern bool oledOk;
 extern bool fOk;
 extern bool rOk;
 extern bool lOk;
+extern bool frontOk;
+extern bool rightOk;
+extern bool leftOk;
 extern bool imuFound;
 extern float yawDeg;
 extern float gyroBiasZ;
@@ -56,7 +59,8 @@ constexpr uint32_t BRAKE_MS = 35UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 6000UL;
 constexpr uint8_t I2C_MUX_ADDRESS = 0x70;
 constexpr uint8_t TOF_I2C_ADDRESS = 0x29;
-constexpr uint16_t TOF_INVALID_MM = 8000;
+constexpr uint16_t TOF_MAX_VALID_MM = 2000;
+constexpr uint32_t TOF_RESPONSE_TIMEOUT_MS = 100UL;
 
 struct CellStatus {
   bool freeFront;
@@ -68,16 +72,42 @@ uint16_t scanDistF = 0;
 uint16_t scanDistL = 0;
 uint16_t scanDistR = 0;
 uint8_t simultaneousTofZeroCycles = 0;
+bool tofSensorsInitialized = false;
 
 void resetMuxChannel(uint8_t channel) {
   selectI2CChannel(channel);
 }
 
-bool reinitializeTof(Adafruit_VL53L0X& sensor, uint8_t channel) {
+bool initializeTofOnce(Adafruit_VL53L0X& sensor, uint8_t channel) {
   selectI2CChannel(channel);
-  if (!sensor.begin(TOF_I2C_ADDRESS, false, &Wire)) return false;
-  delayMicroseconds(250);
-  return true;
+  // El driver Adafruit no implementa setTimeout(); su declaracion esta
+  // deshabilitada. Wire watchdog + el limite de 100 ms de la lectura protegen
+  // el bus sin reinicializar el VL53L0X en el ciclo normal de navegacion.
+  const bool initialized = sensor.begin(TOF_I2C_ADDRESS, false, &Wire,
+                                        Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
+  delayMicroseconds(200);
+  return initialized;
+}
+
+void initializeTofSensors() {
+  if (tofSensorsInitialized) return;
+
+  // Inicializacion unica: cada VL53L0X comparte 0x29, pero esta aislado por
+  // su canal TCA9548A (F=2, L=3, R=4).
+  fOk = initializeTofOnce(frontSensor, MUX_CH_FRONT);
+  lOk = initializeTofOnce(leftSensor, MUX_CH_LEFT);
+  rOk = initializeTofOnce(rightSensor, MUX_CH_RIGHT);
+  frontOk = fOk;
+  leftOk = lOk;
+  rightOk = rOk;
+  tofSensorsInitialized = true;
+
+  Serial.print(F("[TOF] Inicio unico F/L/R: "));
+  Serial.print(fOk ? F("OK") : F("FALLO"));
+  Serial.print('/');
+  Serial.print(lOk ? F("OK") : F("FALLO"));
+  Serial.print('/');
+  Serial.println(rOk ? F("OK") : F("FALLO"));
 }
 
 // Cada llamada toma una conversion fisica individual. Nunca devuelve un dato
@@ -87,21 +117,14 @@ uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok) 
 
   const auto takeFreshMeasurement = [&]() -> uint16_t {
     selectI2CChannel(channel);
+    const uint32_t startedMs = millis();
     const uint16_t range = sensor.readRange();
     const uint8_t status = sensor.readRangeStatus();
-    return (range > 0 && range < TOF_INVALID_MM && status == 0) ? range : 0;
+    const bool timedOut = sensor.timeoutOccurred() ||
+                          (millis() - startedMs > TOF_RESPONSE_TIMEOUT_MS);
+    return (!timedOut && range > 0 && range <= TOF_MAX_VALID_MM && status == 0) ? range : 0;
   };
-
-  uint16_t range = takeFreshMeasurement();
-  if (range != 0) return range;
-
-  // Un 0, timeout o distancia invalida reinicia solo el VL53L0X de este canal
-  // y exige una segunda conversion fisica antes de declarar pared.
-  Serial.println(F("[TOF] Reinicializando canal"));
-  if (!reinitializeTof(sensor, channel)) return 0;
-  range = takeFreshMeasurement();
-  if (range == 0) Serial.println(F("[TOF] Fallo -> B"));
-  return range;
+  return takeFreshMeasurement();
 }
 
 void recoverI2cBus() {
@@ -329,6 +352,10 @@ void Navigator::begin() {
   turnActive_ = false;
   turnSlowed_ = false;
   turnBraking_ = false;
+
+  // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
+  // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
+  initializeTofSensors();
 
   // El sesgo se fija antes de activar la FSM para que los giros y el yaw-lock
   // compartan una sola referencia de gyro Z desde el arranque.

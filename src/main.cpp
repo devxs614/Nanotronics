@@ -64,30 +64,6 @@ bool frontOk = false;
 bool rightOk = false;
 bool leftOk  = false;
 
-bool initVL53L0XWithRetry(Adafruit_VL53L0X& sensor, uint8_t channel, const char* name) {
-  for (uint8_t attempt = 1; attempt <= 3; attempt++) {
-    selectI2CChannel(channel);
-    delay(2);
-    if (sensor.begin(0x29, false)) {
-      Serial.print(F("Init "));
-      Serial.print(name);
-      Serial.print(F(" (Canal "));
-      Serial.print(channel);
-      Serial.print(F("): [OK] (Intento "));
-      Serial.print(attempt);
-      Serial.println(F(")"));
-      return true;
-    }
-    delay(5);
-  }
-  Serial.print(F("Init "));
-  Serial.print(name);
-  Serial.print(F(" (Canal "));
-  Serial.print(channel);
-  Serial.println(F("): [FALLO tras 3 intentos]"));
-  return false;
-}
-
 bool imuFound = false;
 uint8_t imuChannel = 0;
 uint8_t imuAddr = 0;
@@ -272,20 +248,8 @@ void setup() {
   Serial.println(color.isCalibrated() ? F("Calibracion de color EEPROM: [CARGADA]")
                                       : F("Calibracion de color EEPROM: [NO ENCONTRADA]"));
 
-  // Canal 2 (Frontal)
-  Serial.print(F("Probando Canal 2 (Frontal)... "));
-  fOk = initVL53L0XWithRetry(frontSensor, MUX_CH_FRONT, "Frontal");
-
-  // Canal 3 (Izquierdo)
-  Serial.print(F("Probando Canal 3 (Izquierdo)... "));
-  lOk = initVL53L0XWithRetry(leftSensor, MUX_CH_LEFT, "Izquierdo");
-
-  // Canal 4 (Derecho)
-  Serial.print(F("Probando Canal 4 (Derecho)... "));
-  rOk = initVL53L0XWithRetry(rightSensor, MUX_CH_RIGHT, "Derecho");
-  frontOk = fOk;
-  rightOk = rOk;
-  leftOk  = lOk;
+  // Los VL53L0X se inicializan una sola vez en Navigator::begin(), justo
+  // antes de que SCAN realice la primera medicion fisica.
 
   // Canal 0 (IMU): direccion fija del mapa MUX; Navigator calibra el bias al iniciar.
   scanMuxForImu();
