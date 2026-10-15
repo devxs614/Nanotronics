@@ -26,6 +26,7 @@ extern float gyroBiasZ;
 extern uint32_t lastImuUs;
 extern float odometryMm;
 extern Adafruit_SSD1306 display;
+extern Navigator navigator;
 
 float wrap180(float angle);
 float updateYaw();
@@ -116,6 +117,16 @@ void recoverI2cBus() {
   Wire.write(static_cast<uint8_t>(0x00));
   Wire.endTransmission();
   delayMicroseconds(100);
+
+  // Wire.end() tambien desconecta logicamente a la OLED. Restablece el
+  // controlador y fuerza el mismo render de cuatro filas usado por la FSM.
+  selectI2CChannel(MUX_CH_OLED);
+  oledOk = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  if (oledOk) {
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    navigator.renderOled();
+  }
 }
 
 void recoverTofBusIfNeeded(uint16_t& distF, uint16_t& distL, uint16_t& distR) {
@@ -398,8 +409,18 @@ void Navigator::startTurn180() {
 
 void Navigator::turn90(bool turnLeft, float targetDegrees) {
   if (!imuFound) {
-    turnActive_ = false;
-    return;
+    // No abandona el giro sin liberar y volver a consultar el canal de la IMU.
+    motorController.stop();
+    delay(100);
+    resetMuxChannel(MUX_CH_IMU);
+    int16_t ax, ay, az, gx, gy, gz;
+    if (!readImuRaw(ax, ay, az, gx, gy, gz)) {
+      turnActive_ = false;
+      Serial.println(F("[GIRO] IMU no recuperada"));
+      return;
+    }
+    imuFound = true;
+    lastImuUs = micros();
   }
 
   motorController.stop();
@@ -451,12 +472,28 @@ Navigator::TurnResult Navigator::updateTurn() {
     return TurnResult::COMPLETED;
   }
 
-  if (!imuFound || millis() - turnStartedMs_ >= TURN_TIMEOUT_MS) {
+  if (millis() - turnStartedMs_ >= TURN_TIMEOUT_MS) {
     motorController.stop();
     turnActive_ = false;
     resetMuxChannel(MUX_CH_IMU);
-    Serial.println(!imuFound ? F("[GIRO] IMU recuperando") : F("[GIRO] Timeout recuperando"));
+    Serial.println(F("[GIRO] Timeout recuperando"));
     return TurnResult::FAILED;
+  }
+
+  if (!imuFound) {
+    motorController.stop();
+    delay(100);
+    resetMuxChannel(MUX_CH_IMU);
+    int16_t ax, ay, az, gx, gy, gz;
+    if (!readImuRaw(ax, ay, az, gx, gy, gz)) {
+      turnActive_ = false;
+      Serial.println(F("[GIRO] IMU no recuperada"));
+      return TurnResult::FAILED;
+    }
+    imuFound = true;
+    lastImuUs = micros();
+    const int16_t pwm = turnDirection_ * (turnSlowed_ ? SLOW_PWM : TURN_PWM);
+    motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
   }
 
   if (Serial.available() > 0 && (Serial.peek() == 's' || Serial.peek() == 'S')) {
@@ -467,7 +504,25 @@ Navigator::TurnResult Navigator::updateTurn() {
   selectI2CChannel(MUX_CH_IMU);
   delayMicroseconds(300);
   int16_t ax, ay, az, gx, gy, gz;
-  if (readImuRaw(ax, ay, az, gx, gy, gz)) {
+  bool imuRead = readImuRaw(ax, ay, az, gx, gy, gz);
+  if (!imuRead) {
+    // Un fallo de transaccion no salta directo a SCAN: frena, deja estabilizar
+    // el canal y reintenta una sola lectura limpia antes de abortar el giro.
+    motorController.stop();
+    delay(100);
+    resetMuxChannel(MUX_CH_IMU);
+    imuRead = readImuRaw(ax, ay, az, gx, gy, gz);
+    if (!imuRead) {
+      turnActive_ = false;
+      Serial.println(F("[GIRO] I2C IMU no recuperado"));
+      return TurnResult::FAILED;
+    }
+    const int16_t pwm = turnDirection_ * (turnSlowed_ ? SLOW_PWM : TURN_PWM);
+    motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
+    turnLastUs_ = micros();
+  }
+
+  if (imuRead) {
     const uint32_t nowUs = micros();
     const float dt = (nowUs - turnLastUs_) * 0.000001f;
     turnLastUs_ = nowUs;
@@ -611,7 +666,15 @@ void Navigator::update() {
         break;
       }
 
-      const CellStatus status = scanCellWalls();
+      CellStatus status = scanCellWalls();
+      if (scanDistF == 0 && scanDistL == 0 && scanDistR == 0) {
+        // Antes de que DECIDE pueda interpretar tres fallos como un callejon,
+        // deja respirar el bus y exige un segundo muestreo fresco. El segundo
+        // triple-cero activa la recuperacion global de Wire/MUX/OLED.
+        Serial.println(F("[SCAN] ToF 0/0/0; estabilizando I2C"));
+        delay(150);
+        status = scanCellWalls();
+      }
       freeF = status.freeFront;
       freeL = status.freeLeft;
       freeR = status.freeRight;
