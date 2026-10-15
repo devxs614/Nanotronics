@@ -351,14 +351,13 @@ void loop() {
   static char yawStr[8] = "--";
   const uint32_t now = millis();
 
-  // Comandos Serial: 'g' inicia la navegacion, 's' detiene
+  // La navegacion inicia sola; los comandos Serial no pueden detenerla.
   while (Serial.available() > 0) {
     const char cmd = Serial.read();
     if (cmd == 'g' || cmd == 'G') {
       navigator.start();
     } else if (cmd == 's' || cmd == 'S') {
-      navigator.stop();
-      Serial.println(F("[MOTORES DETENIDOS]"));
+      Serial.println(F("[NAV] Comando stop ignorado; solo Rojo detiene"));
     }
   }
 

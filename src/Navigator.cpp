@@ -105,8 +105,10 @@ uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok,
 
   // Fallo: recupera de inmediato el canal TCA9548A y exige una segunda muestra
   // fisica. Si no llega, el 0 resultante se clasifica como pared/bloqueado.
+  Serial.println(F("[TOF] I2C recuperando"));
   resetMuxChannel(channel);
   range = takeFreshMeasurement(continuous);
+  if (range == 0) Serial.println(F("[TOF] Fallo -> B"));
   return range;
 }
 
@@ -154,10 +156,11 @@ void reverseBrake(const int16_t speeds[4], uint32_t durationMs) {
 }
 
 // Avanza una celda (280 mm) con yaw lock IMU + ajuste suave por laseres.
-// Devuelve false si se aborto (usuario, timeout, rumbo fuera de limite o IMU ausente).
+// Un fallo recuperable devuelve false para volver a SCAN; nunca detiene la FSM.
 bool advanceOneCell() {
   if (!imuFound) {
-    Serial.println(F("[AVANCE] IMU no disponible, abortado"));
+    resetMuxChannel(MUX_CH_IMU);
+    Serial.println(F("[AVANCE] IMU recuperando -> SCAN"));
     return false;
   }
   motorController.stop();
@@ -191,16 +194,14 @@ bool advanceOneCell() {
     if (Serial.available() > 0) {
       const char c = Serial.read();
       if (c == 's' || c == 'S') {
-        reason = F("Usuario");
-        activeBrake = false;
-        completed = false;
-        break;
+        Serial.println(F("[NAV] Comando stop ignorado"));
       }
     }
     if (now - startMs > NAV_TIMEOUT_MS) {
       reason = F("TIMEOUT");
-      activeBrake = false;
       completed = false;
+      resetMuxChannel(MUX_CH_IMU);
+      Serial.println(F("[AVANCE] Timeout recuperando -> SCAN"));
       break;
     }
 
@@ -219,8 +220,9 @@ bool advanceOneCell() {
     const float imuError = wrap180(yawDeg - targetYaw);
     if (fabs(imuError) > NAV_MAX_YAW_ABORT_DEG) {
       reason = F("Rumbo fuera de limite");
-      activeBrake = false;
       completed = false;
+      resetMuxChannel(MUX_CH_IMU);
+      Serial.println(F("[AVANCE] Yaw recuperando -> SCAN"));
       break;
     }
 
@@ -295,8 +297,8 @@ bool advanceOneCell() {
 }  // namespace
 
 Navigator::Navigator()
-    : currentState(STOP),
-      plannedMove(ACTION_STOP),
+    : currentState(SCAN),
+      plannedMove(TURN_180),
       currentHeading(NORTH),
       freeF(true),
       freeL(true),
@@ -469,16 +471,14 @@ Navigator::TurnResult Navigator::updateTurn() {
   if (!imuFound || millis() - turnStartedMs_ >= TURN_TIMEOUT_MS) {
     motorController.stop();
     turnActive_ = false;
-    Serial.println(!imuFound ? F("[GIRO] IMU no disponible") : F("[GIRO] TIMEOUT"));
+    resetMuxChannel(MUX_CH_IMU);
+    Serial.println(!imuFound ? F("[GIRO] IMU recuperando") : F("[GIRO] Timeout recuperando"));
     return TurnResult::FAILED;
   }
 
   if (Serial.available() > 0 && (Serial.peek() == 's' || Serial.peek() == 'S')) {
     Serial.read();
-    motorController.stop();
-    turnActive_ = false;
-    Serial.println(F("[GIRO] Abortado"));
-    return TurnResult::FAILED;
+    Serial.println(F("[NAV] Comando stop ignorado"));
   }
 
   selectI2CChannel(MUX_CH_IMU);
@@ -596,20 +596,7 @@ void Navigator::renderOled() {
 }
 
 void Navigator::start() {
-  if (currentState != STOP) return;
-  currentHeading = NORTH;
-  currentState = SCAN;
-  Serial.println(F("[NAV] Navegacion iniciada (regla pared derecha)"));
-}
-
-void Navigator::stop() {
-  motorController.stop();
-  currentState = STOP;
-  plannedMove = ACTION_STOP;
-  turnActive_ = false;
-  turnSlowed_ = false;
-  turnBraking_ = false;
-  turnSettling_ = false;
+  Serial.println(F("[NAV] FSM autonoma ya activa"));
 }
 
 bool Navigator::isRunning() const {
@@ -663,7 +650,10 @@ void Navigator::update() {
         default: Serial.println(F("STOP")); break;
       }
       if (plannedMove == ACTION_STOP) {
-        currentState = STOP;
+        // Defensa: la regla de pared nunca genera ACTION_STOP. Si apareciera,
+        // se transforma en vuelta de 180 para preservar navegacion perpetua.
+        plannedMove = TURN_180;
+        currentState = TURN;
       } else if (plannedMove == FORWARD) {
         currentState = ADVANCE;
       } else {
@@ -677,7 +667,9 @@ void Navigator::update() {
         else if (plannedMove == TURN_LEFT) turn90(true, 90.0f);
         else if (plannedMove == TURN_180) startTurn180();
         else {
-          stop();
+          selectI2CChannel(MUX_CH_IMU);
+          Serial.println(F("[NAV] Giro invalido -> SCAN"));
+          currentState = SCAN;
           break;
         }
       }
@@ -693,22 +685,22 @@ void Navigator::update() {
         }
         currentState = ADVANCE;
       } else if (result == TurnResult::FAILED) {
-        stop();
+        resetMuxChannel(MUX_CH_IMU);
+        Serial.println(F("[NAV] Giro recuperado -> SCAN"));
+        currentState = SCAN;
       }
       break;
     }
 
     case ADVANCE:
-      if (advanceOneCell()) {
-        currentState = SCAN;
-      } else {
-        stop();
-      }
+      advanceOneCell();
+      // Exito, timeout, IMU o I2C: el siguiente ciclo siempre reescanea.
+      currentState = SCAN;
       break;
 
     case STOP:
     default:
-      motorController.stop();
+      // STOP solo es alcanzable desde la deteccion confirmada de baldosa roja.
       break;
   }
 }

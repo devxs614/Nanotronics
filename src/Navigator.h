@@ -93,9 +93,8 @@ class Navigator {
  public:
   Navigator();
   void begin();
-  void start();                // Inicia la navegacion (comando 'g')
+  void start();                // Compatibilidad Serial; la FSM ya inicia automaticamente
   void update();               // Ejecuta el ciclo activo de la FSM en loop()
-  void stop();
   bool isRunning() const;
   bool isGoalColorDetected();  // true si el TCS34725 (canal 1) clasifica como Rojo
   void renderOled();           // OLED (canal 5): YAW|Color, F/L/R, paredes, ODO
