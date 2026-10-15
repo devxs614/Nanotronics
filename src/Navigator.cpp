@@ -57,8 +57,6 @@ constexpr uint32_t TURN_BRAKE_MS = 25UL;
 constexpr uint32_t TURN_SETTLE_MS = 50UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 2500UL;
 constexpr uint8_t I2C_MUX_ADDRESS = 0x70;
-constexpr uint8_t TOF_MAX_RETRIES = 3;
-constexpr uint8_t TOF_MUX_RESET_AFTER_ZERO_CYCLES = 5;
 
 struct CellStatus {
   bool freeFront;
@@ -69,61 +67,47 @@ struct CellStatus {
 uint16_t scanDistF = 0;
 uint16_t scanDistL = 0;
 uint16_t scanDistR = 0;
-uint16_t lastValidDistF = 0;
-uint16_t lastValidDistL = 0;
-uint16_t lastValidDistR = 0;
-uint8_t zeroCyclesF = 0;
-uint8_t zeroCyclesL = 0;
-uint8_t zeroCyclesR = 0;
 
 void resetMuxChannel(uint8_t channel) {
   Wire.beginTransmission(I2C_MUX_ADDRESS);
   Wire.write(static_cast<uint8_t>(0x00));
   Wire.endTransmission();
-  delayMicroseconds(200);
+  delayMicroseconds(300);
   selectI2CChannel(channel);
-  delayMicroseconds(200);
+  delayMicroseconds(300);
 }
 
-// Lee un ToF con recuperacion local al canal: tres reintentos ante 0/fuera de
-// rango, conservacion de la ultima muestra sana y reset del MUX tras seis
-// ciclos invalidos. La ausencia de dato continuo no cuenta como lectura cero.
-void readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok,
-                        bool continuous, uint16_t& dist, uint16_t& lastValid,
-                        uint8_t& zeroCycles) {
-  if (!ok) {
-    dist = lastValid;
-    return;
-  }
+// Cada llamada retorna exclusivamente una muestra tomada en esta llamada. Una
+// medicion ausente, invalida o fuera de rango es 0 (pared segura), nunca una
+// distancia de una celda anterior.
+uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok,
+                            bool continuous) {
+  if (!ok) return 0;
 
-  selectI2CChannel(channel);
-  delayMicroseconds(200);
-  if (continuous && !sensor.isRangeComplete()) return;
+  const auto takeFreshMeasurement = [&](bool useContinuous) -> uint16_t {
+    Wire.beginTransmission(I2C_MUX_ADDRESS);
+    Wire.write(static_cast<uint8_t>(0x00));
+    if (Wire.endTransmission() != 0) return 0;
+    delayMicroseconds(300);
+    selectI2CChannel(channel);
+    delayMicroseconds(300);
 
-  uint16_t range = 0;
-  bool valid = false;
-  for (uint8_t attempt = 0; attempt <= TOF_MAX_RETRIES; ++attempt) {
-    if (attempt > 0) delayMicroseconds(100);
-    range = continuous ? sensor.readRangeResult() : sensor.readRange();
-    if (range > 0 && range <= 2000) {
-      valid = true;
-      break;
-    }
-  }
+    // readRange() inicia una conversion fisica single-shot; en avance continuo
+    // solo se acepta un resultado marcado como listo por el VL53L0X.
+    const uint16_t range = useContinuous
+      ? (sensor.isRangeComplete() ? sensor.readRangeResult() : 0)
+      : sensor.readRange();
+    return (range > 0 && range <= 2000 && sensor.readRangeStatus() == 0) ? range : 0;
+  };
 
-  if (valid) {
-    lastValid = range;
-    dist = range;
-    zeroCycles = 0;
-    return;
-  }
+  uint16_t range = takeFreshMeasurement(continuous);
+  if (range != 0) return range;
 
-  dist = lastValid;
-  if (zeroCycles < 255) ++zeroCycles;
-  if (zeroCycles > TOF_MUX_RESET_AFTER_ZERO_CYCLES) {
-    resetMuxChannel(channel);
-    zeroCycles = 0;
-  }
+  // Fallo: recupera de inmediato el canal TCA9548A y exige una segunda muestra
+  // fisica. Si no llega, el 0 resultante se clasifica como pared/bloqueado.
+  resetMuxChannel(channel);
+  range = takeFreshMeasurement(continuous);
+  return range;
 }
 
 void startNavSensors() {
@@ -141,9 +125,9 @@ void stopNavSensors() {
 // Lee F (canal 2), L (canal 3) y R (canal 4). Libre solo si 150 <= dist < 2000;
 // dist == 0 es un error de lectura y cuenta como PARED.
 CellStatus scanCellWalls() {
-  readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, false, scanDistF, lastValidDistF, zeroCyclesF);
-  readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, false, scanDistL, lastValidDistL, zeroCyclesL);
-  readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, false, scanDistR, lastValidDistR, zeroCyclesR);
+  scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, false);
+  scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, false);
+  scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, false);
 
   CellStatus status;
   status.freeFront = (scanDistF >= UMBRAL_PARED_MM && scanDistF < 2000);
@@ -221,9 +205,9 @@ bool advanceOneCell() {
     }
 
     updateYaw();
-    readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, true, dF, lastValidDistF, zeroCyclesF);
-    readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, true, dL, lastValidDistL, zeroCyclesL);
-    readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, true, dR, lastValidDistR, zeroCyclesR);
+    dF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, true);
+    dL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, true);
+    dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, true);
     odometryMm = readOdometryMm();
 
     if (odometryMm >= CELL_MM) break;
@@ -341,8 +325,6 @@ void Navigator::begin() {
   turnSlowed_ = false;
   turnBraking_ = false;
   turnSettling_ = false;
-  lastValidDistF = lastValidDistL = lastValidDistR = 0;
-  zeroCyclesF = zeroCyclesL = zeroCyclesR = 0;
 
   // El sesgo se fija antes de activar la FSM para que los giros y el yaw-lock
   // compartan una sola referencia de gyro Z desde el arranque.
@@ -350,12 +332,9 @@ void Navigator::begin() {
 
   // Purga: 3 lecturas preliminares de los ToF para descartar los ceros iniciales
   for (uint8_t i = 0; i < 3; i++) {
-    readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, false,
-                       scanDistF, lastValidDistF, zeroCyclesF);
-    readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, false,
-                       scanDistL, lastValidDistL, zeroCyclesL);
-    readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, false,
-                       scanDistR, lastValidDistR, zeroCyclesR);
+    scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, false);
+    scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, false);
+    scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, false);
   }
   currentState = SCAN;  // Los perifericos ya estan listos: la FSM opera de inmediato
 
