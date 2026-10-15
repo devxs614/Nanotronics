@@ -30,6 +30,26 @@ struct ColorProfile {
   bool valid;
 };
 
+// Tabla 4D: RGB normalizado (r/(r+g+b), ...) + intensidad normC = C/50
+struct ColorRef4D {
+  const char* name;
+  float normR, normG, normB, normC;
+  bool isGoal;
+};
+
+const ColorRef4D COLOR_TABLE_4D[] = {
+  {"Cian",       0.312f, 0.375f, 0.312f, 0.240f, false},  // C:12
+  {"Amarillo",   0.458f, 0.333f, 0.208f, 0.400f, false},  // C:20
+  {"Naranja",    0.579f, 0.263f, 0.158f, 0.300f, false},  // C:15
+  {"Rosa",       0.636f, 0.182f, 0.182f, 0.620f, false},  // C:31
+  {"Rojo",       0.640f, 0.200f, 0.160f, 0.400f, true },  // C:20 (META)
+  {"Verde",      0.364f, 0.364f, 0.273f, 0.160f, false},  // C:8
+  {"Piso",       0.447f, 0.340f, 0.213f, 0.880f, false},  // C:44
+  {"Verde Lima", 0.421f, 0.368f, 0.211f, 0.320f, false}   // C:16
+};
+constexpr uint8_t COLOR_TABLE_4D_SIZE = sizeof(COLOR_TABLE_4D) / sizeof(COLOR_TABLE_4D[0]);
+constexpr float COLOR_MAX_DISTANCE_4D = 0.25f;
+
 enum State { SCAN, DECIDE, TURN, ADVANCE, STOP };
 enum Move { FORWARD, TURN_RIGHT, TURN_LEFT, TURN_180, ACTION_STOP };
 enum Orientation { NORTH = 0, EAST = 1, SOUTH = 2, WEST = 3 };
@@ -44,8 +64,10 @@ class Navigator {
   bool freeF, freeL, freeR;
 
   ColorProfile redProfile;  // Color de meta cargado de la EEPROM
+  char currentColorName[12];  // Ultimo color clasificado (Rojo, Cian, ..., Desc)
 
   Move decideRightWallRule();
+  String readDetectedColor(bool& outIsGoal);  // Canal 1: vecino mas cercano sobre COLOR_TABLE
 
  public:
   Navigator();
@@ -54,7 +76,8 @@ class Navigator {
   void update();               // Ejecuta el ciclo activo de la FSM en loop()
   void stop();
   bool isRunning() const;
-  bool isGoalColorDetected();  // Compara el TCS34725 (canal 1) contra redProfile
+  bool isGoalColorDetected();  // true si el TCS34725 (canal 1) clasifica como Rojo
+  void renderOled();           // OLED (canal 5): YAW|Color, F/L/R, paredes, ODO
   Orientation getHeading() const;
 };
 

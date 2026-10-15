@@ -16,11 +16,15 @@ enum ColorSlot : uint8_t {
   SLOT_RED,
   SLOT_GREEN,
   SLOT_FLOOR,
+  SLOT_LIME,     // Verde Lima: se guarda en su propia direccion EEPROM
   SLOT_COUNT
 };
 
+// Clases del bloque EEPROM original (el layout no cambia; Navigator depende de el)
+constexpr uint8_t SLOT_STORED_COUNT = SLOT_LIME;
+
 static const char* const kSlotNames[SLOT_COUNT] = {
-  "Cian", "Amarillo", "Naranja", "Rosa", "Rojo", "Verde", "Piso"
+  "Cian", "Amarillo", "Naranja", "Rosa", "Rojo", "Verde", "Piso", "Verde Lima"
 };
 
 struct ColorSignature {
@@ -32,16 +36,24 @@ struct ColorSignature {
 
 struct ColorCalibrationData {
   uint32_t magic;
-  ColorSignature colors[SLOT_COUNT];
+  ColorSignature colors[SLOT_STORED_COUNT];
+};
+
+struct LimeCalibrationData {
+  uint32_t magic;
+  ColorSignature color;
 };
 
 constexpr uint32_t CALIB_MAGIC = 0x434C5233UL;  // "CLR3" (7 clases)
+constexpr uint32_t LIME_MAGIC = 0x4C494D45UL;   // "LIME"
 constexpr int EEPROM_ADDR = 0;
+constexpr int EEPROM_ADDR_LIME = EEPROM_ADDR + sizeof(ColorCalibrationData);
 constexpr uint8_t SAMPLES_PER_CAPTURE = 10;
 
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 ColorSensor color;
 ColorCalibrationData configData;
+LimeCalibrationData limeData;
 
 bool oledOk = false;
 uint16_t liveR = 0, liveG = 0, liveB = 0, liveC = 0;
@@ -65,6 +77,10 @@ static float distanceSq(float r1, float g1, float b1, float r2, float g2, float 
   return dr * dr + dg * dg + db * db;
 }
 
+static ColorSignature& slotSig(uint8_t slot) {
+  return (slot == SLOT_LIME) ? limeData.color : configData.colors[slot];
+}
+
 static void readColorSensor() {
   selectI2CChannel(1);
   delay(2);
@@ -79,12 +95,12 @@ static void readColorSensor() {
 // Umbral de cada color = mitad de la distancia al color calibrado mas cercano
 static void computeThresholds() {
   for (uint8_t i = 0; i < SLOT_COUNT; ++i) {
-    ColorSignature& a = configData.colors[i];
+    ColorSignature& a = slotSig(i);
     if (!a.valid) continue;
     float minDist = 1.0e9f;
     for (uint8_t j = 0; j < SLOT_COUNT; ++j) {
-      if (i == j || !configData.colors[j].valid) continue;
-      const ColorSignature& b = configData.colors[j];
+      if (i == j || !slotSig(j).valid) continue;
+      const ColorSignature& b = slotSig(j);
       const float d = sqrt(distanceSq(a.rn, a.gn, a.bn, b.rn, b.gn, b.bn));
       if (d < minDist) minDist = d;
     }
@@ -100,7 +116,7 @@ static void classify() {
 
   float best = 1.0e9f;
   for (uint8_t i = 0; i < SLOT_COUNT; ++i) {
-    const ColorSignature& s = configData.colors[i];
+    const ColorSignature& s = slotSig(i);
     if (!s.valid) continue;
     const float d = sqrt(distanceSq(liveRn, liveGn, liveBn, s.rn, s.gn, s.bn));
     if (d < best) {
@@ -110,7 +126,7 @@ static void classify() {
   }
   if (detected >= 0) {
     detectedDist = best;
-    if (best > configData.colors[detected].threshold) detected = -2;  // Fuera de umbral
+    if (best > slotSig(detected).threshold) detected = -2;  // Fuera de umbral
   }
 }
 
@@ -131,7 +147,7 @@ static void captureSample(uint8_t slot) {
     delay(30);
   }
 
-  ColorSignature& s = configData.colors[slot];
+  ColorSignature& s = slotSig(slot);
   s.r = sumR / SAMPLES_PER_CAPTURE;
   s.g = sumG / SAMPLES_PER_CAPTURE;
   s.b = sumB / SAMPLES_PER_CAPTURE;
@@ -155,7 +171,7 @@ static void captureSample(uint8_t slot) {
 static void printCalibration() {
   Serial.println(F("--- CALIBRACION ACTUAL ---"));
   for (uint8_t i = 0; i < SLOT_COUNT; ++i) {
-    const ColorSignature& s = configData.colors[i];
+    const ColorSignature& s = slotSig(i);
     Serial.print(kSlotNames[i]);
     Serial.print(F(": "));
     if (!s.valid) {
@@ -174,11 +190,29 @@ static void printCalibration() {
   Serial.println(F("--------------------------"));
 }
 
+static void saveLimeToEeprom() {
+  limeData.magic = LIME_MAGIC;
+  EEPROM.put(EEPROM_ADDR_LIME, limeData);
+}
+
 static void saveToEeprom() {
   computeThresholds();
   configData.magic = CALIB_MAGIC;
   EEPROM.put(EEPROM_ADDR, configData);
+  if (limeData.color.valid) saveLimeToEeprom();
   Serial.println(F("[EEPROM] Calibracion guardada."));
+}
+
+// Verde Lima: 10 muestras promediadas y guardado inmediato en su propia direccion
+static void calibrateLime() {
+  captureSample(SLOT_LIME);
+  saveLimeToEeprom();
+  const ColorSignature& s = limeData.color;
+  Serial.print(F("[EEPROM] Verde Lima guardado correctamente: R:"));
+  Serial.print(s.r);
+  Serial.print(F(" G:")); Serial.print(s.g);
+  Serial.print(F(" B:")); Serial.print(s.b);
+  Serial.print(F(" C:")); Serial.println(s.c);
 }
 
 static void loadFromEeprom() {
@@ -186,10 +220,17 @@ static void loadFromEeprom() {
   EEPROM.get(EEPROM_ADDR, stored);
   if (stored.magic != CALIB_MAGIC) {
     Serial.println(F("[EEPROM] No hay calibracion valida almacenada."));
-    return;
+  } else {
+    configData = stored;
+    Serial.println(F("[EEPROM] Calibracion cargada."));
   }
-  configData = stored;
-  Serial.println(F("[EEPROM] Calibracion cargada."));
+
+  LimeCalibrationData storedLime;
+  EEPROM.get(EEPROM_ADDR_LIME, storedLime);
+  if (storedLime.magic == LIME_MAGIC) {
+    limeData = storedLime;
+    Serial.println(F("[EEPROM] Verde Lima cargado."));
+  }
   printCalibration();
 }
 
@@ -199,7 +240,7 @@ static void showMenu() {
   Serial.println(F("=============================================="));
   Serial.println(F("  'c' CIAN  'y' AMARILLO  'o' NARANJA"));
   Serial.println(F("  'p' ROSA  'r' ROJO      'v' VERDE (Inicio)"));
-  Serial.println(F("  'f' PISO"));
+  Serial.println(F("  'f' PISO  'g' VERDE LIMA (EEPROM propia)"));
   Serial.println(F("  'w' guardar en EEPROM   'l' leer de EEPROM"));
   Serial.println(F("  'm' menu\n"));
 }
@@ -224,11 +265,17 @@ static void renderOled() {
   display.print(liveB);
 
   display.setCursor(0, 32);
-  display.print(F("DET: "));
-  display.print(detectedName());
+  if (detected == SLOT_LIME) {
+    display.print(F("COLOR DETECTADO:"));
+    display.setCursor(0, 40);
+    display.print(F("VERDE LIMA"));
+  } else {
+    display.print(F("DET: "));
+    display.print(detectedName());
+  }
 
-  display.setCursor(0, 48);
-  display.print(F("Cmd:c,y,o,p,r,v,f|w:Save"));
+  display.setCursor(0, 52);
+  display.print(F("c y o p r v g f|w"));
   display.display();
 }
 
@@ -242,6 +289,7 @@ void setup() {
   Wire.begin();
   Wire.setClock(100000UL);
 
+  memset(&limeData, 0, sizeof(limeData));
   memset(&configData, 0, sizeof(configData));
   configData.magic = CALIB_MAGIC;
 
@@ -272,6 +320,7 @@ void loop() {
       case 'r': case 'R': captureSample(SLOT_RED);    break;
       case 'v': case 'V': captureSample(SLOT_GREEN);  break;
       case 'f': case 'F': captureSample(SLOT_FLOOR);  break;
+      case 'g': case 'G': calibrateLime();            break;
       case 'w': case 'W': saveToEeprom();             break;
       case 'l': case 'L': loadFromEeprom();           break;
       case 'm': case 'M': showMenu();                 break;
@@ -297,6 +346,7 @@ void loop() {
       Serial.print(detectedDist, 3);
       Serial.print(')');
     }
+    if (detected == SLOT_LIME) Serial.print(F(" | COLOR DETECTADO: VERDE LIMA"));
     Serial.println();
   }
 }

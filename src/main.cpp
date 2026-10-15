@@ -217,7 +217,7 @@ float readOdometryMm() {
 }
 
 bool isWallFree(uint16_t dist) {
-  return dist == 0 || dist >= UMBRAL_PARED_MM;
+  return dist >= UMBRAL_PARED_MM && dist < 2000;  // dist == 0 es error de lectura = pared
 }
 
 // OLED (Canal 5): YAW|Color, distancias F/L/R, estado de paredes y odometria
@@ -390,11 +390,9 @@ void loop() {
     }
   }
 
-  // Navegando: la FSM controla motores, sensores y OLED
-  if (navigator.isRunning()) {
-    navigator.update();
-    return;
-  }
+  // La FSM corre de inmediato desde begin(); mientras navega controla motores, sensores y OLED
+  navigator.update();
+  if (navigator.isRunning()) return;
 
   // 1. Actualización rápida de Encoders y Odometría
   if (now - lastFastUpdateMs >= FAST_SENSOR_UPDATE_MS) {

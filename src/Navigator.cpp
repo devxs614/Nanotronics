@@ -24,12 +24,12 @@ extern bool imuFound;
 extern float yawDeg;
 extern uint32_t lastImuUs;
 extern float odometryMm;
+extern Adafruit_SSD1306 display;
 
 float wrap180(float angle);
 float updateYaw();
 float readOdometryMm();
 bool isWallFree(uint16_t dist);
-void renderNavOled(uint16_t f, uint16_t l, uint16_t r, const char* colorName);
 
 namespace {
 
@@ -100,16 +100,17 @@ uint16_t readSingleRange(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok) {
   return (range > 0 && range < 2000) ? range : 0;
 }
 
-// Lee F (canal 2), L (canal 3) y R (canal 4); sensores fuera de rango cuentan como libres
+// Lee F (canal 2), L (canal 3) y R (canal 4). Libre solo si 150 <= dist < 2000;
+// dist == 0 es un error de lectura y cuenta como PARED.
 CellStatus scanCellWalls() {
   scanDistF = readSingleRange(frontSensor, NAV_CH_FRONT, fOk);
   scanDistL = readSingleRange(leftSensor, NAV_CH_LEFT, lOk);
   scanDistR = readSingleRange(rightSensor, NAV_CH_RIGHT, rOk);
 
   CellStatus status;
-  status.freeFront = isWallFree(scanDistF);
-  status.freeLeft = isWallFree(scanDistL);
-  status.freeRight = isWallFree(scanDistR);
+  status.freeFront = (scanDistF >= UMBRAL_PARED_MM && scanDistF < 2000);
+  status.freeLeft = (scanDistL >= UMBRAL_PARED_MM && scanDistL < 2000);
+  status.freeRight = (scanDistR >= UMBRAL_PARED_MM && scanDistR < 2000);
   return status;
 }
 
@@ -339,13 +340,21 @@ Navigator::Navigator()
       freeL(true),
       freeR(true) {
   memset(&redProfile, 0, sizeof(redProfile));
+  strcpy(currentColorName, "Desc");
 }
 
 void Navigator::begin() {
-  currentState = STOP;
   plannedMove = ACTION_STOP;
   currentHeading = NORTH;
-  freeF = freeL = freeR = true;
+  freeF = freeL = freeR = false;
+
+  // Purga: 3 lecturas preliminares de los ToF para descartar los ceros iniciales
+  for (uint8_t i = 0; i < 3; i++) {
+    readSingleRange(frontSensor, NAV_CH_FRONT, fOk);
+    readSingleRange(leftSensor, NAV_CH_LEFT, lOk);
+    readSingleRange(rightSensor, NAV_CH_RIGHT, rOk);
+  }
+  currentState = SCAN;  // Los perifericos ya estan listos: la FSM opera de inmediato
 
   // La EEPROM guarda magic + firmas; el rojo es la firma COLOR_SLOT_RED
   ColorCalibrationEeprom stored;
@@ -372,41 +381,93 @@ void Navigator::begin() {
     Serial.print(F(" C:")); Serial.print(redProfile.c);
     Serial.print(F(" Tol:")); Serial.println(redProfile.tolerance, 3);
   } else {
-    Serial.println(F("NO CALIBRADO (meta roja deshabilitada)"));
+    Serial.println(F("NO CALIBRADO"));
   }
+  Serial.println(F("[NAV] Navegacion autonoma iniciada (clasificacion 4D COLOR_TABLE_4D)"));
 }
 
-// La tolerancia guardada esta en espacio RGB normalizado, por lo que la distancia
-// euclidiana se calcula con r/(r+g+b), g/(r+g+b) y b/(r+g+b) de la lectura y del perfil.
-bool Navigator::isGoalColorDetected() {
-  if (!redProfile.valid) return false;
-
+// Vecino mas cercano 4D: evalua los 8 colores de COLOR_TABLE_4D (RGB normalizado + C/50)
+// y elige la menor distancia euclidiana (aceptada si < 0.25); si no, "Desc".
+String Navigator::readDetectedColor(bool& outIsGoal) {
+  outIsGoal = false;
   selectI2CChannel(1);
   delay(2);
   color.readRaw();
-  const uint16_t r = color.latestReading.r;
-  const uint16_t g = color.latestReading.g;
-  const uint16_t b = color.latestReading.b;
-  const uint16_t c = color.latestReading.c;
+  const uint16_t rawR = color.latestReading.r;
+  const uint16_t rawG = color.latestReading.g;
+  const uint16_t rawB = color.latestReading.b;
+  const uint16_t rawC = color.latestReading.c;
 
-  const float total = static_cast<float>(r) + g + b;
-  if (total <= 0.0f) return false;
+  if (rawC < 5) return String("Oscuro");
 
-  const float diffR = (r / total) - redProfile.rn;
-  const float diffG = (g / total) - redProfile.gn;
-  const float diffB = (b / total) - redProfile.bn;
-  const float distance = sqrt(diffR * diffR + diffG * diffG + diffB * diffB);
+  const float sum = static_cast<float>(rawR) + rawG + rawB;
+  if (sum <= 0.0f) return String("Desc");
+  const float nr = rawR / sum;
+  const float ng = rawG / sum;
+  const float nb = rawB / sum;
+  const float nc = static_cast<float>(rawC) / 50.0f;
 
-  const bool isGoal = (c > 80) && (distance <= redProfile.tolerance);
+  float minDistance = 999.0f;
+  int bestIndex = -1;
+  for (uint8_t i = 0; i < COLOR_TABLE_4D_SIZE; i++) {
+    const float dr = nr - COLOR_TABLE_4D[i].normR;
+    const float dg = ng - COLOR_TABLE_4D[i].normG;
+    const float db = nb - COLOR_TABLE_4D[i].normB;
+    const float dc = nc - COLOR_TABLE_4D[i].normC;
+    const float dist = sqrt(dr * dr + dg * dg + db * db + dc * dc);
+    if (dist < minDistance) {
+      minDistance = dist;
+      bestIndex = i;
+    }
+  }
+
+  if (bestIndex != -1 && minDistance < COLOR_MAX_DISTANCE_4D) {
+    outIsGoal = COLOR_TABLE_4D[bestIndex].isGoal;
+    return String(COLOR_TABLE_4D[bestIndex].name);
+  }
+  return String("Desc");
+}
+
+bool Navigator::isGoalColorDetected() {
+  bool isGoal = false;
+  const String name = readDetectedColor(isGoal);
+  strncpy(currentColorName, name.c_str(), sizeof(currentColorName) - 1);
+  currentColorName[sizeof(currentColorName) - 1] = '\0';
   if (isGoal) {
-    Serial.print(F("[NAV] META ROJA detectada | R:")); Serial.print(r);
-    Serial.print(F(" G:")); Serial.print(g);
-    Serial.print(F(" B:")); Serial.print(b);
-    Serial.print(F(" C:")); Serial.print(c);
-    Serial.print(F(" | Dist:")); Serial.print(distance, 3);
-    Serial.print(F(" <= Tol:")); Serial.println(redProfile.tolerance, 3);
+    Serial.print(F("[NAV] META ROJA detectada | R:")); Serial.print(color.latestReading.r);
+    Serial.print(F(" G:")); Serial.print(color.latestReading.g);
+    Serial.print(F(" B:")); Serial.print(color.latestReading.b);
+    Serial.print(F(" C:")); Serial.println(color.latestReading.c);
   }
   return isGoal;
+}
+
+// OLED (canal 5), 4 filas: "YAW:-152 | Desc", "F:0 L:249 R:0", "F:L L:L R:L", "ODO: 1 mm"
+void Navigator::renderOled() {
+  if (!oledOk) return;
+  char line[24];
+  selectI2CChannel(5);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  snprintf(line, sizeof(line), "YAW:%d | %.4s", static_cast<int>(yawDeg), currentColorName);
+  display.setCursor(0, 0);
+  display.print(line);
+
+  snprintf(line, sizeof(line), "F:%u L:%u R:%u", scanDistF, scanDistL, scanDistR);
+  display.setCursor(0, 16);
+  display.print(line);
+
+  snprintf(line, sizeof(line), "F:%c L:%c R:%c", freeF ? 'L' : 'B', freeL ? 'L' : 'B',
+           freeR ? 'L' : 'B');
+  display.setCursor(0, 32);
+  display.print(line);
+
+  snprintf(line, sizeof(line), "ODO: %d mm", static_cast<int>(odometryMm));
+  display.setCursor(0, 48);
+  display.print(line);
+  display.display();
 }
 
 void Navigator::start() {
@@ -440,15 +501,24 @@ Move Navigator::decideRightWallRule() {
 void Navigator::update() {
   switch (currentState) {
     case SCAN: {
+      // Color primero: la baldosa roja es la meta y detiene la FSM
+      if (isGoalColorDetected()) {
+        motorController.stop();
+        currentState = STOP;
+        plannedMove = ACTION_STOP;
+        odometryMm = readOdometryMm();
+        renderOled();  // Fila 1 muestra "Rojo"
+        Serial.println(F("[META ROJA DETECTADA] ROBOT DETENIDO"));
+        break;
+      }
+
       const CellStatus status = scanCellWalls();
       freeF = status.freeFront;
       freeL = status.freeLeft;
       freeR = status.freeRight;
       printCellStatus(status);
-      if (oledOk) {
-        odometryMm = readOdometryMm();
-        renderNavOled(scanDistF, scanDistL, scanDistR, color.getColorName());
-      }
+      odometryMm = readOdometryMm();
+      renderOled();
       currentState = DECIDE;
       break;
     }
