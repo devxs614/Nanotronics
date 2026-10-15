@@ -16,8 +16,8 @@ inline void selectI2CChannel(uint8_t channel) {
 #define MUX_CH_IMU 0
 #define MUX_CH_COLOR 1
 #define MUX_CH_FRONT 2
-#define MUX_CH_RIGHT 3
-#define MUX_CH_LEFT 4
+#define MUX_CH_LEFT 3
+#define MUX_CH_RIGHT 4
 #define MUX_CH_OLED 5
 
 // Odometría y Dimensiones de Celda

@@ -56,6 +56,8 @@ enum Orientation { NORTH = 0, EAST = 1, SOUTH = 2, WEST = 3 };
 
 class Navigator {
  private:
+  enum class TurnResult : uint8_t { IN_PROGRESS, COMPLETED, FAILED };
+
   State currentState;
   Move plannedMove;
   Orientation currentHeading;
@@ -66,8 +68,27 @@ class Navigator {
   ColorProfile redProfile;  // Color de meta cargado de la EEPROM
   char currentColorName[12];  // Ultimo color clasificado (Rojo, Cian, ..., Desc)
 
+  // Estado del giro no bloqueante, integrado directamente desde el gyro Z.
+  float gyroBiasZ_;
+  float turnedAngle_;
+  float turnTargetDegrees_;
+  int8_t turnDirection_;
+  uint32_t turnStartedMs_;
+  uint32_t turnLastUs_;
+  uint32_t brakeStartedMs_;
+  uint32_t settleStartedMs_;
+  bool turnActive_;
+  bool turnSlowed_;
+  bool turnBraking_;
+  bool turnSettling_;
+
   Move decideRightWallRule();
   String readDetectedColor(bool& outIsGoal);  // Canal 1: vecino mas cercano sobre COLOR_TABLE
+  void calibrateGyroBias();
+  void turn90(bool turnLeft, float targetDegrees = 90.0f);
+  void startTurn180();
+  TurnResult updateTurn();
+  void beginTurnBrake();
 
  public:
   Navigator();

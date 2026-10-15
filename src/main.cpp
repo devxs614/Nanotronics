@@ -67,7 +67,7 @@ bool leftOk  = false;
 bool initVL53L0XWithRetry(Adafruit_VL53L0X& sensor, uint8_t channel, const char* name) {
   for (uint8_t attempt = 1; attempt <= 3; attempt++) {
     selectI2CChannel(channel);
-    delay(30);
+    delay(2);
     if (sensor.begin(0x29, false)) {
       Serial.print(F("Init "));
       Serial.print(name);
@@ -78,7 +78,7 @@ bool initVL53L0XWithRetry(Adafruit_VL53L0X& sensor, uint8_t channel, const char*
       Serial.println(F(")"));
       return true;
     }
-    delay(50);
+    delay(5);
   }
   Serial.print(F("Init "));
   Serial.print(name);
@@ -125,7 +125,7 @@ bool readRegisters(uint8_t addr, uint8_t reg, uint8_t* buf, uint8_t len) {
 
 bool readImuRaw(int16_t& ax, int16_t& ay, int16_t& az, int16_t& gx, int16_t& gy, int16_t& gz) {
   uint8_t b[14];
-  selectI2CChannel(imuChannel);
+  selectI2CChannel(MUX_CH_IMU);
   if (!readRegisters(imuAddr, REG_ACCEL_XOUT_H, b, 14)) return false;
   ax = (int16_t)((b[0] << 8) | b[1]);
   ay = (int16_t)((b[2] << 8) | b[3]);
@@ -138,50 +138,28 @@ bool readImuRaw(int16_t& ax, int16_t& ay, int16_t& az, int16_t& gx, int16_t& gy,
 
 void scanMuxForImu() {
   const uint8_t addrs[2] = {0x68, 0x69};
-  for (uint8_t ch = 0; ch < 8 && !imuFound; ch++) {
-    selectI2CChannel(ch);
-    delay(2);
-    for (uint8_t i = 0; i < 2; i++) {
-      const uint8_t addr = addrs[i];
-      if (!i2cPing(addr)) continue;
+  selectI2CChannel(MUX_CH_IMU);
+  for (uint8_t i = 0; i < 2 && !imuFound; i++) {
+    const uint8_t addr = addrs[i];
+    if (!i2cPing(addr)) continue;
 
-      uint8_t who = 0;
-      readRegisters(addr, REG_WHO_AM_I, &who, 1);
-      writeRegister(addr, REG_GYRO_CONFIG, 0x18);  // +-2000 dps (16.4 LSB/dps)
-      writeRegister(addr, REG_PWR_MGMT_1, 0x00);
-      delay(10);
+    uint8_t who = 0;
+    readRegisters(addr, REG_WHO_AM_I, &who, 1);
+    writeRegister(addr, REG_GYRO_CONFIG, 0x18);  // +-2000 dps (16.4 LSB/dps)
+    writeRegister(addr, REG_PWR_MGMT_1, 0x00);
 
-      imuFound = true;
-      imuChannel = ch;
-      imuAddr = addr;
-      imuWhoAmI = who;
-      Serial.print(F("[SCANNER OK] MPU6050 en Canal "));
-      Serial.print(ch);
-      Serial.print(F(", Direccion 0x"));
-      Serial.print(addr, HEX);
-      Serial.print(F(", WHO_AM_I = 0x"));
-      Serial.println(who, HEX);
-      break;
-    }
+    imuFound = true;
+    imuChannel = MUX_CH_IMU;
+    imuAddr = addr;
+    imuWhoAmI = who;
+    Serial.print(F("[SCANNER OK] MPU6050 en Canal "));
+    Serial.print(MUX_CH_IMU);
+    Serial.print(F(", Direccion 0x"));
+    Serial.print(addr, HEX);
+    Serial.print(F(", WHO_AM_I = 0x"));
+    Serial.println(who, HEX);
   }
-  if (!imuFound) Serial.println(F("[SCANNER FALLO] MPU6050 no responde en canales 0-7"));
-}
-
-void calibrateGyroBias() {
-  const uint8_t samples = 100;
-  float sum = 0.0f;
-  uint8_t ok = 0;
-  int16_t ax, ay, az, gx, gy, gz;
-  for (uint8_t i = 0; i < samples; i++) {
-    if (readImuRaw(ax, ay, az, gx, gy, gz)) {
-      sum += gz / GYRO_LSB_PER_DPS;
-      ok++;
-    }
-    delay(5);
-  }
-  if (ok > 0) gyroBiasZ = sum / ok;
-  Serial.print(F("Bias gyro Z (dps): "));
-  Serial.println(gyroBiasZ, 3);
+  if (!imuFound) Serial.println(F("[SCANNER FALLO] MPU6050 no responde en Canal 0"));
 }
 
 // ---------------------------------------------------------------------------
@@ -223,7 +201,7 @@ bool isWallFree(uint16_t dist) {
 // OLED (Canal 5): YAW|Color, distancias F/L/R, estado de paredes y odometria
 void renderNavOled(uint16_t f, uint16_t l, uint16_t r, const char* colorName) {
   char line[24];
-  selectI2CChannel(5);
+  selectI2CChannel(MUX_CH_OLED);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -253,7 +231,7 @@ void setup() {
 #ifdef TCS_POWER
   pinMode(TCS_POWER, OUTPUT);
   digitalWrite(TCS_POWER, HIGH);
-  delay(100);
+  delay(2);
 #endif
 
   Wire.begin();
@@ -270,8 +248,8 @@ void setup() {
   motorController.stop();
 
   // Canal 5 (OLED)
-  selectI2CChannel(5);
-  delay(20);
+  selectI2CChannel(MUX_CH_OLED);
+  delay(2);
   oledOk = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   Serial.print(F("OLED SSD1306 (Canal 5): "));
   Serial.println(oledOk ? F("[OK]") : F("[FALLÓ]"));
@@ -288,7 +266,7 @@ void setup() {
   }
 
   // Canal 1 (Color): color.begin() carga la calibracion desde la EEPROM
-  selectI2CChannel(1);
+  selectI2CChannel(MUX_CH_COLOR);
   delay(2);
   color.begin();
   colorOk = true;
@@ -298,28 +276,22 @@ void setup() {
 
   // Canal 2 (Frontal)
   Serial.print(F("Probando Canal 2 (Frontal)... "));
-  fOk = initVL53L0XWithRetry(frontSensor, 2, "Frontal");
-  delay(50);
+  fOk = initVL53L0XWithRetry(frontSensor, MUX_CH_FRONT, "Frontal");
 
   // Canal 3 (Izquierdo)
   Serial.print(F("Probando Canal 3 (Izquierdo)... "));
-  lOk = initVL53L0XWithRetry(leftSensor, 3, "Izquierdo");
-  delay(50);
+  lOk = initVL53L0XWithRetry(leftSensor, MUX_CH_LEFT, "Izquierdo");
 
   // Canal 4 (Derecho)
   Serial.print(F("Probando Canal 4 (Derecho)... "));
-  rOk = initVL53L0XWithRetry(rightSensor, 4, "Derecho");
-  delay(50);
+  rOk = initVL53L0XWithRetry(rightSensor, MUX_CH_RIGHT, "Derecho");
   frontOk = fOk;
   rightOk = rOk;
   leftOk  = lOk;
 
-  // Canal 0..7 (IMU): escaneo MUX, despertado por registros y bias del giroscopio
+  // Canal 0 (IMU): direccion fija del mapa MUX; Navigator calibra el bias al iniciar.
   scanMuxForImu();
-  if (imuFound) {
-    calibrateGyroBias();
-    lastImuUs = micros();
-  }
+  if (imuFound) lastImuUs = micros();
   Serial.print(F("IMU MPU6050: "));
   Serial.println(imuFound ? F("[OK]") : F("[FALLÓ]"));
 
@@ -407,22 +379,22 @@ void loop() {
     lastSensorReadMs = now;
 
     // Canal 1: Color
-    selectI2CChannel(1);
+    selectI2CChannel(MUX_CH_COLOR);
     delay(2);
     color.update();
 
     // Canal 2: Frontal
-    selectI2CChannel(2);
+    selectI2CChannel(MUX_CH_FRONT);
     delay(2);
     distF = frontSensor.readRange();
 
     // Canal 3: Izquierdo
-    selectI2CChannel(3);
+    selectI2CChannel(MUX_CH_LEFT);
     delay(2);
     distL = leftSensor.readRange();
 
     // Canal 4: Derecho
-    selectI2CChannel(4);
+    selectI2CChannel(MUX_CH_RIGHT);
     delay(2);
     distR = rightSensor.readRange();
 

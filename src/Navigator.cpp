@@ -22,20 +22,18 @@ extern bool rOk;
 extern bool lOk;
 extern bool imuFound;
 extern float yawDeg;
+extern float gyroBiasZ;
 extern uint32_t lastImuUs;
 extern float odometryMm;
 extern Adafruit_SSD1306 display;
 
 float wrap180(float angle);
 float updateYaw();
+bool readImuRaw(int16_t& ax, int16_t& ay, int16_t& az, int16_t& gx, int16_t& gy, int16_t& gz);
 float readOdometryMm();
 bool isWallFree(uint16_t dist);
 
 namespace {
-
-constexpr uint8_t NAV_CH_FRONT = 2;
-constexpr uint8_t NAV_CH_LEFT = 3;
-constexpr uint8_t NAV_CH_RIGHT = 4;
 
 constexpr int16_t NAV_BASE_PWM = 200;
 constexpr float NAV_DECEL_START_MM = CELL_MM - 50.0f;
@@ -51,12 +49,16 @@ constexpr float NAV_MAX_YAW_ABORT_DEG = 30.0f;
 constexpr uint32_t NAV_CONTROL_PERIOD_MS = 40UL;
 constexpr uint32_t NAV_TIMEOUT_MS = 8000UL;
 
-constexpr float TURN_TARGET_DEG = 90.0f;
-constexpr float TURN_SLOW_ZONE_DEG = 15.0f;
-constexpr int16_t TURN_BRAKE_PWM = 35;
-constexpr uint32_t TURN_BRAKE_MS = 35UL;
-constexpr uint32_t TURN_TIMEOUT_MS = 4000UL;
-constexpr uint32_t TURN_SETTLE_MS = 150UL;
+constexpr float TURN_SLOW_ZONE_DEG = 20.0f;
+constexpr int16_t TURN_START_PWM = 120;
+constexpr int16_t NAV_TURN_SLOW_PWM = 45;
+constexpr int16_t TURN_BRAKE_PWM = 60;
+constexpr uint32_t TURN_BRAKE_MS = 25UL;
+constexpr uint32_t TURN_SETTLE_MS = 50UL;
+constexpr uint32_t TURN_TIMEOUT_MS = 2500UL;
+constexpr uint8_t I2C_MUX_ADDRESS = 0x70;
+constexpr uint8_t TOF_MAX_RETRIES = 3;
+constexpr uint8_t TOF_MUX_RESET_AFTER_ZERO_CYCLES = 5;
 
 struct CellStatus {
   bool freeFront;
@@ -67,45 +69,81 @@ struct CellStatus {
 uint16_t scanDistF = 0;
 uint16_t scanDistL = 0;
 uint16_t scanDistR = 0;
+uint16_t lastValidDistF = 0;
+uint16_t lastValidDistL = 0;
+uint16_t lastValidDistR = 0;
+uint8_t zeroCyclesF = 0;
+uint8_t zeroCyclesL = 0;
+uint8_t zeroCyclesR = 0;
 
-// Lectura de un VL53L0X en modo continuo; conserva el valor previo si no hay dato nuevo
-void readNavSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok, uint16_t& dist) {
+void resetMuxChannel(uint8_t channel) {
+  Wire.beginTransmission(I2C_MUX_ADDRESS);
+  Wire.write(static_cast<uint8_t>(0x00));
+  Wire.endTransmission();
+  delayMicroseconds(200);
+  selectI2CChannel(channel);
+  delayMicroseconds(200);
+}
+
+// Lee un ToF con recuperacion local al canal: tres reintentos ante 0/fuera de
+// rango, conservacion de la ultima muestra sana y reset del MUX tras seis
+// ciclos invalidos. La ausencia de dato continuo no cuenta como lectura cero.
+void readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok,
+                        bool continuous, uint16_t& dist, uint16_t& lastValid,
+                        uint8_t& zeroCycles) {
   if (!ok) {
-    dist = 0;
+    dist = lastValid;
     return;
   }
+
   selectI2CChannel(channel);
-  if (!sensor.isRangeComplete()) return;
-  const uint16_t range = sensor.readRangeResult();
-  dist = (range > 0 && range < 2000) ? range : 0;
+  delayMicroseconds(200);
+  if (continuous && !sensor.isRangeComplete()) return;
+
+  uint16_t range = 0;
+  bool valid = false;
+  for (uint8_t attempt = 0; attempt <= TOF_MAX_RETRIES; ++attempt) {
+    if (attempt > 0) delayMicroseconds(100);
+    range = continuous ? sensor.readRangeResult() : sensor.readRange();
+    if (range > 0 && range <= 2000) {
+      valid = true;
+      break;
+    }
+  }
+
+  if (valid) {
+    lastValid = range;
+    dist = range;
+    zeroCycles = 0;
+    return;
+  }
+
+  dist = lastValid;
+  if (zeroCycles < 255) ++zeroCycles;
+  if (zeroCycles > TOF_MUX_RESET_AFTER_ZERO_CYCLES) {
+    resetMuxChannel(channel);
+    zeroCycles = 0;
+  }
 }
 
 void startNavSensors() {
-  if (fOk) { selectI2CChannel(NAV_CH_FRONT); frontSensor.startRangeContinuous(33); }
-  if (lOk) { selectI2CChannel(NAV_CH_LEFT); leftSensor.startRangeContinuous(33); }
-  if (rOk) { selectI2CChannel(NAV_CH_RIGHT); rightSensor.startRangeContinuous(33); }
+  if (fOk) { selectI2CChannel(MUX_CH_FRONT); frontSensor.startRangeContinuous(33); }
+  if (lOk) { selectI2CChannel(MUX_CH_LEFT); leftSensor.startRangeContinuous(33); }
+  if (rOk) { selectI2CChannel(MUX_CH_RIGHT); rightSensor.startRangeContinuous(33); }
 }
 
 void stopNavSensors() {
-  if (fOk) { selectI2CChannel(NAV_CH_FRONT); frontSensor.stopRangeContinuous(); }
-  if (lOk) { selectI2CChannel(NAV_CH_LEFT); leftSensor.stopRangeContinuous(); }
-  if (rOk) { selectI2CChannel(NAV_CH_RIGHT); rightSensor.stopRangeContinuous(); }
-}
-
-uint16_t readSingleRange(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok) {
-  if (!ok) return 0;
-  selectI2CChannel(channel);
-  sensor.readRange();  // La primera lectura tras cambiar de canal puede venir vieja
-  const uint16_t range = sensor.readRange();
-  return (range > 0 && range < 2000) ? range : 0;
+  if (fOk) { selectI2CChannel(MUX_CH_FRONT); frontSensor.stopRangeContinuous(); }
+  if (lOk) { selectI2CChannel(MUX_CH_LEFT); leftSensor.stopRangeContinuous(); }
+  if (rOk) { selectI2CChannel(MUX_CH_RIGHT); rightSensor.stopRangeContinuous(); }
 }
 
 // Lee F (canal 2), L (canal 3) y R (canal 4). Libre solo si 150 <= dist < 2000;
 // dist == 0 es un error de lectura y cuenta como PARED.
 CellStatus scanCellWalls() {
-  scanDistF = readSingleRange(frontSensor, NAV_CH_FRONT, fOk);
-  scanDistL = readSingleRange(leftSensor, NAV_CH_LEFT, lOk);
-  scanDistR = readSingleRange(rightSensor, NAV_CH_RIGHT, rOk);
+  readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, false, scanDistF, lastValidDistF, zeroCyclesF);
+  readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, false, scanDistL, lastValidDistL, zeroCyclesL);
+  readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, false, scanDistR, lastValidDistR, zeroCyclesR);
 
   CellStatus status;
   status.freeFront = (scanDistF >= UMBRAL_PARED_MM && scanDistF < 2000);
@@ -183,9 +221,9 @@ bool advanceOneCell() {
     }
 
     updateYaw();
-    readNavSensor(frontSensor, NAV_CH_FRONT, fOk, dF);
-    readNavSensor(leftSensor, NAV_CH_LEFT, lOk, dL);
-    readNavSensor(rightSensor, NAV_CH_RIGHT, rOk, dR);
+    readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, true, dF, lastValidDistF, zeroCyclesF);
+    readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, true, dL, lastValidDistL, zeroCyclesL);
+    readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, true, dR, lastValidDistR, zeroCyclesR);
     odometryMm = readOdometryMm();
 
     if (odometryMm >= CELL_MM) break;
@@ -270,66 +308,6 @@ bool advanceOneCell() {
   return completed;
 }
 
-// Giro de 90 grados sobre su eje por acumulacion de delta IMU.
-// Devuelve false si se aborto (usuario, timeout o IMU ausente).
-bool turn90(bool turnLeft) {
-  if (!imuFound) {
-    Serial.println(F("[GIRO] IMU no disponible"));
-    return false;
-  }
-  motorController.stop();
-  while (Serial.available() > 0) Serial.read();
-
-  // Izquierda: M1/M3 atras, M2/M4 adelante. Derecha: el inverso.
-  const int16_t dir = turnLeft ? 1 : -1;
-  float turnedAngle = 0.0f;
-  bool slow = false;
-  bool completed = true;
-
-  Serial.print(F("\n[GIRO] "));
-  Serial.println(turnLeft ? F("IZQUIERDA 90") : F("DERECHA 90"));
-
-  lastImuUs = micros();
-  const uint32_t startMs = millis();
-  const int16_t basePwm = dir * TURN_BASE_PWM;
-  motorController.setSpeeds(-basePwm, basePwm, -basePwm, basePwm);
-
-  while (turnedAngle < TURN_TARGET_DEG) {
-    if (millis() - startMs > TURN_TIMEOUT_MS) {
-      Serial.println(F("[GIRO] TIMEOUT"));
-      completed = false;
-      break;
-    }
-    if (Serial.available() > 0 && (Serial.peek() == 's' || Serial.peek() == 'S')) {
-      Serial.read();
-      Serial.println(F("[GIRO] Abortado"));
-      completed = false;
-      break;
-    }
-
-    turnedAngle += fabs(updateYaw());
-
-    if (!slow && turnedAngle >= (TURN_TARGET_DEG - TURN_SLOW_ZONE_DEG)) {
-      slow = true;
-      const int16_t slowPwm = dir * TURN_SLOW_PWM;
-      motorController.setSpeeds(-slowPwm, slowPwm, -slowPwm, slowPwm);
-    }
-    motorController.update();
-  }
-
-  const int16_t brakePwm = -dir * TURN_BRAKE_PWM;
-  const int16_t brake[4] = {-brakePwm, brakePwm, -brakePwm, brakePwm};
-  reverseBrake(brake, TURN_BRAKE_MS);
-  lastImuUs = micros();
-
-  Serial.print(F("Giro completado | Ángulo acumulado: "));
-  Serial.print(turnedAngle, 2);
-  Serial.print(F("° | Error: "));
-  Serial.print(turnedAngle - TURN_TARGET_DEG, 2);
-  Serial.println(F("°"));
-  return completed;
-}
-
 }  // namespace
 
 Navigator::Navigator()
@@ -338,7 +316,19 @@ Navigator::Navigator()
       currentHeading(NORTH),
       freeF(true),
       freeL(true),
-      freeR(true) {
+      freeR(true),
+      gyroBiasZ_(0.0f),
+      turnedAngle_(0.0f),
+      turnTargetDegrees_(0.0f),
+      turnDirection_(1),
+      turnStartedMs_(0),
+      turnLastUs_(0),
+      brakeStartedMs_(0),
+      settleStartedMs_(0),
+      turnActive_(false),
+      turnSlowed_(false),
+      turnBraking_(false),
+      turnSettling_(false) {
   memset(&redProfile, 0, sizeof(redProfile));
   strcpy(currentColorName, "Desc");
 }
@@ -347,12 +337,25 @@ void Navigator::begin() {
   plannedMove = ACTION_STOP;
   currentHeading = NORTH;
   freeF = freeL = freeR = false;
+  turnActive_ = false;
+  turnSlowed_ = false;
+  turnBraking_ = false;
+  turnSettling_ = false;
+  lastValidDistF = lastValidDistL = lastValidDistR = 0;
+  zeroCyclesF = zeroCyclesL = zeroCyclesR = 0;
+
+  // El sesgo se fija antes de activar la FSM para que los giros y el yaw-lock
+  // compartan una sola referencia de gyro Z desde el arranque.
+  calibrateGyroBias();
 
   // Purga: 3 lecturas preliminares de los ToF para descartar los ceros iniciales
   for (uint8_t i = 0; i < 3; i++) {
-    readSingleRange(frontSensor, NAV_CH_FRONT, fOk);
-    readSingleRange(leftSensor, NAV_CH_LEFT, lOk);
-    readSingleRange(rightSensor, NAV_CH_RIGHT, rOk);
+    readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, false,
+                       scanDistF, lastValidDistF, zeroCyclesF);
+    readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, false,
+                       scanDistL, lastValidDistL, zeroCyclesL);
+    readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, false,
+                       scanDistR, lastValidDistR, zeroCyclesR);
   }
   currentState = SCAN;  // Los perifericos ya estan listos: la FSM opera de inmediato
 
@@ -386,11 +389,154 @@ void Navigator::begin() {
   Serial.println(F("[NAV] Navegacion autonoma iniciada (clasificacion 4D COLOR_TABLE_4D)"));
 }
 
+// Captura exactamente 100 muestras separadas por 2 ms (ventana nominal de 200 ms)
+// con el robot en reposo. El valor tambien alimenta updateYaw() de main.cpp para
+// que avance y giro resten el mismo bias calibrado.
+void Navigator::calibrateGyroBias() {
+  gyroBiasZ_ = 0.0f;
+  selectI2CChannel(MUX_CH_IMU);
+  if (!imuFound) {
+    gyroBiasZ = gyroBiasZ_;
+    return;
+  }
+
+  constexpr uint8_t kSamples = 100;
+  float sum = 0.0f;
+  uint8_t validSamples = 0;
+  int16_t ax, ay, az, gx, gy, gz;
+  for (uint8_t sample = 0; sample < kSamples; ++sample) {
+    selectI2CChannel(MUX_CH_IMU);
+    if (readImuRaw(ax, ay, az, gx, gy, gz)) {
+      sum += static_cast<float>(gz) / GYRO_LSB_PER_DPS;
+      ++validSamples;
+    }
+    delay(2);
+  }
+
+  if (validSamples > 0) gyroBiasZ_ = sum / validSamples;
+  gyroBiasZ = gyroBiasZ_;
+  lastImuUs = micros();
+  Serial.print(F("[NAV] Bias gyro Z (dps): "));
+  Serial.println(gyroBiasZ_, 3);
+}
+
+void Navigator::startTurn180() {
+  turn90(false, 180.0f);
+}
+
+void Navigator::turn90(bool turnLeft, float targetDegrees) {
+  if (!imuFound) {
+    turnActive_ = false;
+    return;
+  }
+
+  motorController.stop();
+  selectI2CChannel(MUX_CH_IMU);
+  delayMicroseconds(300);
+  turnedAngle_ = 0.0f;
+  turnTargetDegrees_ = targetDegrees;
+  turnDirection_ = turnLeft ? -1 : 1;
+  turnStartedMs_ = millis();
+  turnLastUs_ = micros();
+  turnActive_ = true;
+  turnSlowed_ = false;
+  turnBraking_ = false;
+  turnSettling_ = false;
+
+  // Convencion mecanica validada: izquierda usa PWM negativo y derecha positivo.
+  const int16_t pwm = turnDirection_ * TURN_START_PWM;
+  motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
+  Serial.print(F("[GIRO] Inicio "));
+  Serial.print(turnLeft ? F("IZQUIERDA ") : F("DERECHA "));
+  Serial.print(targetDegrees, 1);
+  Serial.println(F(" grados"));
+}
+
+void Navigator::beginTurnBrake() {
+  // Invierte la polaridad durante 25 ms para contrarrestar la inercia sin bloquear loop().
+  const int16_t pwm = -turnDirection_ * TURN_BRAKE_PWM;
+  const int16_t brake[4] = {-pwm, pwm, -pwm, pwm};
+  for (uint8_t motor = 0; motor < 4; ++motor) motorController.currentPWM[motor] = brake[motor];
+  motorController.setSpeeds(brake[0], brake[1], brake[2], brake[3]);
+  motorController.update();
+  brakeStartedMs_ = millis();
+  turnBraking_ = true;
+}
+
+Navigator::TurnResult Navigator::updateTurn() {
+  if (!turnActive_) return TurnResult::FAILED;
+
+  if (turnBraking_) {
+    motorController.update();
+    if (millis() - brakeStartedMs_ < TURN_BRAKE_MS) return TurnResult::IN_PROGRESS;
+    motorController.stop();
+    turnBraking_ = false;
+    turnSettling_ = true;
+    settleStartedMs_ = millis();
+    return TurnResult::IN_PROGRESS;
+  }
+
+  if (turnSettling_) {
+    if (millis() - settleStartedMs_ < TURN_SETTLE_MS) return TurnResult::IN_PROGRESS;
+    turnActive_ = false;
+    turnSettling_ = false;
+    lastImuUs = micros();
+    Serial.print(F("[GIRO] Completado: "));
+    Serial.print(turnedAngle_, 1);
+    Serial.println(F(" grados"));
+    return TurnResult::COMPLETED;
+  }
+
+  if (!imuFound || millis() - turnStartedMs_ >= TURN_TIMEOUT_MS) {
+    motorController.stop();
+    turnActive_ = false;
+    Serial.println(!imuFound ? F("[GIRO] IMU no disponible") : F("[GIRO] TIMEOUT"));
+    return TurnResult::FAILED;
+  }
+
+  if (Serial.available() > 0 && (Serial.peek() == 's' || Serial.peek() == 'S')) {
+    Serial.read();
+    motorController.stop();
+    turnActive_ = false;
+    Serial.println(F("[GIRO] Abortado"));
+    return TurnResult::FAILED;
+  }
+
+  selectI2CChannel(MUX_CH_IMU);
+  delayMicroseconds(300);
+  int16_t ax, ay, az, gx, gy, gz;
+  if (readImuRaw(ax, ay, az, gx, gy, gz)) {
+    const uint32_t nowUs = micros();
+    const float dt = (nowUs - turnLastUs_) * 0.000001f;
+    turnLastUs_ = nowUs;
+    if (dt > 0.0f && dt < 0.25f) {
+      const float delta = ((static_cast<float>(gz) / GYRO_LSB_PER_DPS) - gyroBiasZ_) *
+                          IMU_SCALE_FACTOR * dt;
+      yawDeg = wrap180(yawDeg + delta);
+      turnedAngle_ += fabs(delta);
+    }
+  }
+
+  if (!turnSlowed_ && turnedAngle_ >= turnTargetDegrees_ - TURN_SLOW_ZONE_DEG) {
+    turnSlowed_ = true;
+    const int16_t pwm = turnDirection_ * NAV_TURN_SLOW_PWM;
+    motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
+  }
+
+  if (turnedAngle_ >= turnTargetDegrees_) {
+    turnedAngle_ = turnTargetDegrees_;
+    beginTurnBrake();
+  } else {
+    motorController.update();
+  }
+  return TurnResult::IN_PROGRESS;
+}
+
 // Vecino mas cercano 4D: evalua los 8 colores de COLOR_TABLE_4D (RGB normalizado + C/50)
 // y elige la menor distancia euclidiana (aceptada si < 0.25); si no, "Desc".
 String Navigator::readDetectedColor(bool& outIsGoal) {
   outIsGoal = false;
-  selectI2CChannel(1);
+  selectI2CChannel(MUX_CH_COLOR);
   delay(2);
   color.readRaw();
   const uint16_t rawR = color.latestReading.r;
@@ -446,7 +592,7 @@ bool Navigator::isGoalColorDetected() {
 void Navigator::renderOled() {
   if (!oledOk) return;
   char line[24];
-  selectI2CChannel(5);
+  selectI2CChannel(MUX_CH_OLED);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -481,6 +627,10 @@ void Navigator::stop() {
   motorController.stop();
   currentState = STOP;
   plannedMove = ACTION_STOP;
+  turnActive_ = false;
+  turnSlowed_ = false;
+  turnBraking_ = false;
+  turnSettling_ = false;
 }
 
 bool Navigator::isRunning() const {
@@ -543,25 +693,27 @@ void Navigator::update() {
       break;
 
     case TURN: {
-      bool ok = true;
-      if (plannedMove == TURN_RIGHT) {
-        ok = turn90(false);
-        if (ok) currentHeading = static_cast<Orientation>((currentHeading + 1) % 4);
-      } else if (plannedMove == TURN_LEFT) {
-        ok = turn90(true);
-        if (ok) currentHeading = static_cast<Orientation>((currentHeading + 3) % 4);
-      } else if (plannedMove == TURN_180) {
-        ok = turn90(false);
-        if (ok) {
-          delay(TURN_SETTLE_MS);
-          ok = turn90(false);
+      if (!turnActive_) {
+        if (plannedMove == TURN_RIGHT) turn90(false, 90.0f);
+        else if (plannedMove == TURN_LEFT) turn90(true, 90.0f);
+        else if (plannedMove == TURN_180) startTurn180();
+        else {
+          stop();
+          break;
         }
-        if (ok) currentHeading = static_cast<Orientation>((currentHeading + 2) % 4);
       }
-      if (ok) {
-        delay(TURN_SETTLE_MS);
+
+      const TurnResult result = updateTurn();
+      if (result == TurnResult::COMPLETED) {
+        if (plannedMove == TURN_RIGHT) {
+          currentHeading = static_cast<Orientation>((currentHeading + 1) % 4);
+        } else if (plannedMove == TURN_LEFT) {
+          currentHeading = static_cast<Orientation>((currentHeading + 3) % 4);
+        } else {  // TURN_180
+          currentHeading = static_cast<Orientation>((currentHeading + 2) % 4);
+        }
         currentState = ADVANCE;
-      } else {
+      } else if (result == TurnResult::FAILED) {
         stop();
       }
       break;
@@ -569,7 +721,6 @@ void Navigator::update() {
 
     case ADVANCE:
       if (advanceOneCell()) {
-        delay(TURN_SETTLE_MS);
         currentState = SCAN;
       } else {
         stop();
