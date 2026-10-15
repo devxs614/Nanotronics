@@ -50,11 +50,11 @@ constexpr uint32_t NAV_CONTROL_PERIOD_MS = 40UL;
 constexpr uint32_t NAV_TIMEOUT_MS = 8000UL;
 
 constexpr float TURN_SLOW_ZONE_DEG = 20.0f;
-constexpr int16_t TURN_START_PWM = 120;
+constexpr int16_t TURN_START_PWM = 125;
 constexpr int16_t NAV_TURN_SLOW_PWM = 45;
 constexpr int16_t TURN_BRAKE_PWM = 60;
 constexpr uint32_t TURN_BRAKE_MS = 25UL;
-constexpr uint32_t TURN_SETTLE_MS = 50UL;
+constexpr uint32_t TURN_SETTLE_MS = 40UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 2500UL;
 constexpr uint8_t I2C_MUX_ADDRESS = 0x70;
 
@@ -72,9 +72,9 @@ void resetMuxChannel(uint8_t channel) {
   Wire.beginTransmission(I2C_MUX_ADDRESS);
   Wire.write(static_cast<uint8_t>(0x00));
   Wire.endTransmission();
-  delayMicroseconds(300);
+  delayMicroseconds(250);
   selectI2CChannel(channel);
-  delayMicroseconds(300);
+  delayMicroseconds(250);
 }
 
 // Cada llamada retorna exclusivamente una muestra tomada en esta llamada. Una
@@ -88,9 +88,9 @@ uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok,
     Wire.beginTransmission(I2C_MUX_ADDRESS);
     Wire.write(static_cast<uint8_t>(0x00));
     if (Wire.endTransmission() != 0) return 0;
-    delayMicroseconds(300);
+    delayMicroseconds(250);
     selectI2CChannel(channel);
-    delayMicroseconds(300);
+    delayMicroseconds(250);
 
     // readRange() inicia una conversion fisica single-shot; en avance continuo
     // solo se acepta un resultado marcado como listo por el VL53L0X.

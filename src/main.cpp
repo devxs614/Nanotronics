@@ -236,9 +236,7 @@ void setup() {
 
   Wire.begin();
   Wire.setClock(100000UL);
-#if defined(WIRE_HAS_TIMEOUT)
-  Wire.setWireTimeout(3000, true);  // Timeout de 3 ms en transacciones I2C
-#endif
+  Wire.setWireTimeout(3000UL, true);  // Timeout de 3 ms y reinicio automático.
   Serial.println(F("\n=============================================="));
   Serial.println(F("   INICIALIZACIÓN TELEMETRÍA OLED + SENSORES  "));
   Serial.println(F("=============================================="));
