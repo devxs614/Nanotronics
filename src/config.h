@@ -7,10 +7,18 @@
 
 inline void selectI2CChannel(uint8_t channel) {
   if (channel > 7) return;
+
+  // El TCA9548A debe quedar sin canales antes de seleccionar el siguiente.
+  // Evita que un dispositivo de un canal previo mantenga SDA/SCL ocupado.
+  Wire.beginTransmission(0x70);
+  Wire.write(static_cast<uint8_t>(0x00));
+  Wire.endTransmission();
+  delayMicroseconds(100);
+
   Wire.beginTransmission(0x70);
   Wire.write(static_cast<uint8_t>(1U << channel));
   Wire.endTransmission();
-  delayMicroseconds(100);
+  delayMicroseconds(250);
 }
 
 #define MUX_CH_IMU 0

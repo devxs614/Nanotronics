@@ -54,6 +54,8 @@ constexpr float SLOW_ZONE_DEG = 15.0f;
 constexpr uint32_t BRAKE_MS = 35UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 6000UL;
 constexpr uint8_t I2C_MUX_ADDRESS = 0x70;
+constexpr uint8_t TOF_I2C_ADDRESS = 0x29;
+constexpr uint16_t TOF_INVALID_MM = 8000;
 
 struct CellStatus {
   bool freeFront;
@@ -64,69 +66,81 @@ struct CellStatus {
 uint16_t scanDistF = 0;
 uint16_t scanDistL = 0;
 uint16_t scanDistR = 0;
+uint8_t simultaneousTofZeroCycles = 0;
 
 void resetMuxChannel(uint8_t channel) {
-  Wire.beginTransmission(I2C_MUX_ADDRESS);
-  Wire.write(static_cast<uint8_t>(0x00));
-  Wire.endTransmission();
-  delayMicroseconds(250);
   selectI2CChannel(channel);
-  delayMicroseconds(250);
 }
 
-// Cada llamada retorna exclusivamente una muestra tomada en esta llamada. Una
-// medicion ausente, invalida o fuera de rango es 0 (pared segura), nunca una
-// distancia de una celda anterior.
-uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok,
-                            bool continuous) {
+bool reinitializeTof(Adafruit_VL53L0X& sensor, uint8_t channel) {
+  selectI2CChannel(channel);
+  if (!sensor.begin(TOF_I2C_ADDRESS, false, &Wire)) return false;
+  delayMicroseconds(250);
+  return true;
+}
+
+// Cada llamada toma una conversion fisica individual. Nunca devuelve un dato
+// anterior: una muestra ausente, invalida, fuera de rango o con timeout es 0.
+uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok) {
   if (!ok) return 0;
 
-  const auto takeFreshMeasurement = [&](bool useContinuous) -> uint16_t {
-    Wire.beginTransmission(I2C_MUX_ADDRESS);
-    Wire.write(static_cast<uint8_t>(0x00));
-    if (Wire.endTransmission() != 0) return 0;
-    delayMicroseconds(250);
+  const auto takeFreshMeasurement = [&]() -> uint16_t {
     selectI2CChannel(channel);
-    delayMicroseconds(250);
-
-    // readRange() inicia una conversion fisica single-shot; en avance continuo
-    // solo se acepta un resultado marcado como listo por el VL53L0X.
-    const uint16_t range = useContinuous
-      ? (sensor.isRangeComplete() ? sensor.readRangeResult() : 0)
-      : sensor.readRange();
-    return (range > 0 && range <= 2000 && sensor.readRangeStatus() == 0) ? range : 0;
+    const uint16_t range = sensor.readRange();
+    const uint8_t status = sensor.readRangeStatus();
+    return (range > 0 && range < TOF_INVALID_MM && status == 0) ? range : 0;
   };
 
-  uint16_t range = takeFreshMeasurement(continuous);
+  uint16_t range = takeFreshMeasurement();
   if (range != 0) return range;
 
-  // Fallo: recupera de inmediato el canal TCA9548A y exige una segunda muestra
-  // fisica. Si no llega, el 0 resultante se clasifica como pared/bloqueado.
-  Serial.println(F("[TOF] I2C recuperando"));
-  resetMuxChannel(channel);
-  range = takeFreshMeasurement(continuous);
+  // Un 0, timeout o distancia invalida reinicia solo el VL53L0X de este canal
+  // y exige una segunda conversion fisica antes de declarar pared.
+  Serial.println(F("[TOF] Reinicializando canal"));
+  if (!reinitializeTof(sensor, channel)) return 0;
+  range = takeFreshMeasurement();
   if (range == 0) Serial.println(F("[TOF] Fallo -> B"));
   return range;
 }
 
-void startNavSensors() {
-  if (fOk) { selectI2CChannel(MUX_CH_FRONT); frontSensor.startRangeContinuous(33); }
-  if (lOk) { selectI2CChannel(MUX_CH_LEFT); leftSensor.startRangeContinuous(33); }
-  if (rOk) { selectI2CChannel(MUX_CH_RIGHT); rightSensor.startRangeContinuous(33); }
+void recoverI2cBus() {
+  Serial.println(F("[I2C] Recuperacion global"));
+  Wire.end();
+  delay(5);
+  Wire.begin();
+  Wire.setClock(100000UL);
+  Wire.setWireTimeout(3000UL, true);
+
+  // Reinicia explicitamente el estado del TCA9548A antes de los nuevos barridos.
+  Wire.beginTransmission(I2C_MUX_ADDRESS);
+  Wire.write(static_cast<uint8_t>(0x00));
+  Wire.endTransmission();
+  delayMicroseconds(100);
 }
 
-void stopNavSensors() {
-  if (fOk) { selectI2CChannel(MUX_CH_FRONT); frontSensor.stopRangeContinuous(); }
-  if (lOk) { selectI2CChannel(MUX_CH_LEFT); leftSensor.stopRangeContinuous(); }
-  if (rOk) { selectI2CChannel(MUX_CH_RIGHT); rightSensor.stopRangeContinuous(); }
+void recoverTofBusIfNeeded(uint16_t& distF, uint16_t& distL, uint16_t& distR) {
+  if (distF != 0 || distL != 0 || distR != 0) {
+    simultaneousTofZeroCycles = 0;
+    return;
+  }
+
+  if (++simultaneousTofZeroCycles < 2) return;
+  simultaneousTofZeroCycles = 0;
+  recoverI2cBus();
+
+  // Tras restaurar Wire y el MUX, toma tres mediciones nuevas, no almacenadas.
+  distF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+  distL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
+  distR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
 }
 
 // Lee F (canal 2), L (canal 3) y R (canal 4). Libre solo si 150 <= dist < 2000;
 // dist == 0 es un error de lectura y cuenta como PARED.
 CellStatus scanCellWalls() {
-  scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, false);
-  scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, false);
-  scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, false);
+  scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+  scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
+  scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
+  recoverTofBusIfNeeded(scanDistF, scanDistL, scanDistR);
 
   CellStatus status;
   status.freeFront = (scanDistF >= UMBRAL_PARED_MM && scanDistF < 2000);
@@ -170,8 +184,6 @@ bool advanceOneCell() {
   const float targetYaw = yawDeg;  // Rumbo objetivo = rumbo al iniciar
 
   uint16_t dF = 0, dL = 0, dR = 0;
-  startNavSensors();
-
   Serial.print(F("\n[AVANCE] 1 celda ("));
   Serial.print(CELL_MM, 0);
   Serial.println(F(" mm), IMU yaw lock"));
@@ -201,9 +213,10 @@ bool advanceOneCell() {
     }
 
     updateYaw();
-    dF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, true);
-    dL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, true);
-    dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, true);
+    dF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+    dL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
+    dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
+    recoverTofBusIfNeeded(dF, dL, dR);
     odometryMm = readOdometryMm();
 
     if (odometryMm >= CELL_MM) break;
@@ -262,7 +275,6 @@ bool advanceOneCell() {
   } else {
     motorController.stop();
   }
-  stopNavSensors();
   odometryMm = readOdometryMm();
 
   Serial.print(F("[AVANCE] Finalizado por: "));
@@ -313,9 +325,9 @@ void Navigator::begin() {
 
   // Purga: 3 lecturas preliminares de los ToF para descartar los ceros iniciales
   for (uint8_t i = 0; i < 3; i++) {
-    scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk, false);
-    scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk, false);
-    scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk, false);
+    scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+    scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
+    scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
   }
   currentState = SCAN;  // Los perifericos ya estan listos: la FSM opera de inmediato
 
