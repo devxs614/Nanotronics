@@ -45,21 +45,21 @@ constexpr int16_t NAV_DECEL_END_PWM = 45;
 constexpr int16_t NAV_BRAKE_PWM = 60;
 constexpr uint32_t NAV_BRAKE_MS = 35UL;
 constexpr uint16_t NAV_STOP_FRONT_MM = 35;
-constexpr float NAV_YAW_LOCK_KP = 4.5f;
+constexpr float NAV_YAW_LOCK_KP = 4.0f;
 constexpr float NAV_CORR_LIMIT = 40.0f;
 constexpr float NAV_MAX_YAW_ABORT_DEG = 30.0f;
 constexpr uint32_t NAV_TIMEOUT_MS = 8000UL;
 
 // Parametros validados en el test de giros IMU.
-constexpr int16_t TURN_PWM = 42;
+constexpr int16_t TURN_PWM = 40;
 constexpr int16_t SLOW_PWM = 22;
-constexpr int16_t BRAKE_PWM = 40;
+constexpr int16_t BRAKE_PWM = 45;
 constexpr float SLOW_ZONE_DEG = 15.0f;
 constexpr uint32_t BRAKE_MS = 35UL;
 constexpr uint32_t TURN_SETTLE_MS = 100UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 6000UL;
 constexpr uint8_t TOF_I2C_ADDRESS = 0x29;
-constexpr uint16_t TOF_MIN_VALID_MM = 30;
+constexpr uint16_t TOF_MIN_VALID_MM = 1;
 constexpr uint16_t TOF_MAX_VALID_MM = 2000;
 constexpr uint32_t TOF_RESPONSE_TIMEOUT_MS = 100UL;
 
@@ -129,17 +129,17 @@ uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok) 
   return takeFreshMeasurement();
 }
 
-// Lee F (canal 2), L (canal 4) y R (canal 3). El rango fisico aceptado es
-// 30..2000 mm; una muestra 0/fuera de rango es PARED y >=150 mm es LIBRE.
+// Lee F (canal 2), L (canal 4) y R (canal 3). Un 0 representa retorno
+// ausente/fuera de rango y es LIBRE; solo 1..179 mm representa PARED.
 CellStatus scanCellWalls() {
   scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
   scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
   scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
 
   CellStatus status;
-  status.freeFront = (scanDistF >= UMBRAL_PARED_MM && scanDistF <= TOF_MAX_VALID_MM);
-  status.freeLeft = (scanDistL >= UMBRAL_PARED_MM && scanDistL <= TOF_MAX_VALID_MM);
-  status.freeRight = (scanDistR >= UMBRAL_PARED_MM && scanDistR <= TOF_MAX_VALID_MM);
+  status.freeFront = (scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM);
+  status.freeLeft = (scanDistL == 0 || scanDistL >= UMBRAL_PARED_MM);
+  status.freeRight = (scanDistR == 0 || scanDistR >= UMBRAL_PARED_MM);
   return status;
 }
 
@@ -239,7 +239,8 @@ bool advanceOneCell() {
       currentBaseSpeed = NAV_BASE_PWM;
     }
 
-    // Cada muestra fresca del gyro corrige los dos lados de forma diferencial.
+    // PWM 100 corresponde al avance lineal calibrado de MecanumDrive; el
+    // ajuste diferencial conserva ese rumbo mientras aplica el yaw lock.
     float correction = NAV_YAW_LOCK_KP * yawError;
     correction = constrain(correction, -NAV_CORR_LIMIT, NAV_CORR_LIMIT);
     const int16_t leftPwm = constrain(currentBaseSpeed - static_cast<int16_t>(correction), 0, 255);
@@ -723,9 +724,9 @@ Orientation Navigator::getHeading() const {
 }
 
 Move Navigator::decideRightWallRule() {
-  if (freeL) return TURN_LEFT;
-  if (freeF) return FORWARD;
   if (freeR) return TURN_RIGHT;
+  if (freeF) return FORWARD;
+  if (freeL) return TURN_LEFT;
   return TURN_180;
 }
 

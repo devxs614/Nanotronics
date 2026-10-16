@@ -41,7 +41,7 @@ inline void selectI2CChannel(uint8_t channel) {
 constexpr float CELL_MM = 280.0f;               // 28 cm reales por casilla
 
 // Geometría y Umbrales de Pared
-constexpr uint16_t UMBRAL_PARED_MM = 150;       // Pared si d < 150 mm
+constexpr uint16_t UMBRAL_PARED_MM = 180;       // Pared si 1 <= d < 180 mm; 0 = libre
 constexpr uint16_t SETPOINT_LATERAL_MM = 45;    // Margen de 4.5 cm centrado
 
 // Constantes de Calibración IMU (MPU6050)
@@ -49,7 +49,7 @@ constexpr uint8_t IMU_MUX_CHANNEL = 0;
 constexpr uint8_t MPU6050_I2C_ADDR = 0x68;
 constexpr float GYRO_LSB_PER_DPS = 16.4f;       // Configuración +-2000 dps (0x1B = 0x18)
 constexpr float IMU_SCALE_FACTOR = 9.4235f;     // Factor de ganancia empírico (360° test)
-constexpr int16_t TURN_BASE_PWM = 42;           // PWM base para giro ortogonal preciso
+constexpr int16_t TURN_BASE_PWM = 40;           // PWM base para giro ortogonal preciso
 constexpr int16_t TURN_SLOW_PWM = 22;           // PWM en los últimos 15°
 
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.

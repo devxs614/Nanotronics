@@ -171,7 +171,8 @@ float readOdometryMm() {
 }
 
 bool isWallFree(uint16_t dist) {
-  return dist >= UMBRAL_PARED_MM && dist < 2000;  // dist == 0 es error de lectura = pared
+  // En este mapa, 0 representa fondo/fuera de rango y se navega como libre.
+  return dist == 0 || dist >= UMBRAL_PARED_MM;
 }
 
 // OLED (Canal 5): YAW|Color, distancias F/L/R, estado de paredes y odometria
