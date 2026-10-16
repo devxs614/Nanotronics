@@ -52,6 +52,11 @@ constexpr float IMU_SCALE_FACTOR = 9.4235f;     // Factor de ganancia empírico 
 constexpr int16_t TURN_BASE_PWM = 45;           // PWM base para giro ortogonal preciso
 constexpr int16_t TURN_SLOW_PWM = 25;           // PWM en los últimos 15°
 
+// Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.
+constexpr uint32_t NAV_STARTUP_STABILIZE_MS = 4000UL;
+constexpr uint32_t NAV_CELL_REST_MS = 3000UL;
+constexpr uint32_t NAV_REST_TELEMETRY_MS = 200UL;
+
 #define DEBUG_ENABLED true
 #ifndef COMPETITION_MODE
 #define COMPETITION_MODE false

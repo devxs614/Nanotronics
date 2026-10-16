@@ -290,6 +290,9 @@ void setup() {
                                &lineSensor, &gripperController);
   diagnostics.begin();
   visionInterface.begin();
+  // Navigator mantiene el chasis detenido durante la estabilizacion inicial
+  // de 4 s y la calibracion del bias del giroscopio.
+  motorController.stop();
   navigator.begin();
 
   Serial.println(F("Robot initialized successfully"));

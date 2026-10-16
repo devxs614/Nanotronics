@@ -29,6 +29,7 @@ extern float gyroBiasZ;
 extern uint32_t lastImuUs;
 extern float odometryMm;
 extern Adafruit_SSD1306 display;
+extern Navigator navigator;
 
 float wrap180(float angle);
 float updateYaw();
@@ -56,7 +57,6 @@ constexpr int16_t BRAKE_PWM = 40;
 constexpr float SLOW_ZONE_DEG = 15.0f;
 constexpr uint32_t BRAKE_MS = 35UL;
 constexpr uint32_t TURN_SETTLE_MS = 50UL;
-constexpr uint32_t TURN_REST_MS = 200UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 6000UL;
 constexpr uint8_t TOF_I2C_ADDRESS = 0x29;
 constexpr uint16_t TOF_MIN_VALID_MM = 30;
@@ -271,9 +271,9 @@ bool advanceOneCell() {
   } else {
     motorController.stop();
   }
-  // Antes del siguiente SCAN el robot permanece totalmente inmovil. Las
-  // mediciones de color, ToF y OLED del siguiente ciclo parten de reposo.
-  delay(200);
+  // Los 3000 ms reglamentarios se cumplen con motores detenidos mientras ToF,
+  // OLED y la telemetria Serie continúan actualizandose.
+  navigator.restWithTelemetry(NAV_CELL_REST_MS);
   odometryMm = readOdometryMm();
 
   Serial.print(F("[AVANCE] Finalizado por: "));
@@ -305,6 +305,7 @@ Navigator::Navigator()
       brakeStartedMs_(0),
       settleStartedMs_(0),
       restStartedMs_(0),
+      lastRestTelemetryMs_(0),
       turnActive_(false),
       turnSlowed_(false),
       turnBraking_(false),
@@ -323,6 +324,11 @@ void Navigator::begin() {
   turnBraking_ = false;
   turnSettling_ = false;
   turnResting_ = false;
+
+  // El arranque autonomo no habilita los motores: se estabilizan voltajes e
+  // I2C durante cuatro segundos antes de crear la referencia del giroscopio.
+  motorController.stop();
+  delay(NAV_STARTUP_STABILIZE_MS);
 
   // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
   // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
@@ -436,6 +442,7 @@ void Navigator::turn90(bool turnLeft, float targetDegrees) {
   turnBraking_ = false;
   turnSettling_ = false;
   turnResting_ = false;
+  lastRestTelemetryMs_ = 0;
 
   const int16_t pwm = turnDirection_ * TURN_PWM;
   motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
@@ -474,11 +481,17 @@ Navigator::TurnResult Navigator::updateTurn() {
     turnSettling_ = false;
     turnResting_ = true;
     restStartedMs_ = millis();
+    lastRestTelemetryMs_ = 0;
     return TurnResult::IN_PROGRESS;
   }
 
   if (turnResting_) {
-    if (millis() - restStartedMs_ < TURN_REST_MS) return TurnResult::IN_PROGRESS;
+    if (lastRestTelemetryMs_ == 0 ||
+        millis() - lastRestTelemetryMs_ >= NAV_REST_TELEMETRY_MS) {
+      refreshStationaryTelemetry();
+      lastRestTelemetryMs_ = millis();
+    }
+    if (millis() - restStartedMs_ < NAV_CELL_REST_MS) return TurnResult::IN_PROGRESS;
     turnResting_ = false;
     turnActive_ = false;
     lastImuUs = micros();
@@ -563,6 +576,44 @@ Navigator::TurnResult Navigator::updateTurn() {
     motorController.update();
   }
   return TurnResult::IN_PROGRESS;
+}
+
+// Mantiene datos frescos mientras el robot espera inmovil entre casillas.
+// No reinicializa sensores ni reutiliza mediciones anteriores.
+void Navigator::refreshStationaryTelemetry() {
+  motorController.stop();
+  updateYaw();
+  const CellStatus status = scanCellWalls();
+  freeF = status.freeFront;
+  freeL = status.freeLeft;
+  freeR = status.freeRight;
+  odometryMm = readOdometryMm();
+  renderOled();
+
+  Serial.print(F("[PAUSA] YAW:"));
+  Serial.print(yawDeg, 1);
+  Serial.print(F(" F:"));
+  Serial.print(scanDistF);
+  Serial.print(F(" L:"));
+  Serial.print(scanDistL);
+  Serial.print(F(" R:"));
+  Serial.println(scanDistR);
+}
+
+void Navigator::restWithTelemetry(uint32_t durationMs) {
+  motorController.stop();
+  const uint32_t startedMs = millis();
+  uint32_t lastTelemetryMs = 0;
+
+  while (millis() - startedMs < durationMs) {
+    const uint32_t nowMs = millis();
+    if (lastTelemetryMs == 0 || nowMs - lastTelemetryMs >= NAV_REST_TELEMETRY_MS) {
+      refreshStationaryTelemetry();
+      lastTelemetryMs = millis();
+    }
+    yield();
+  }
+  motorController.stop();
 }
 
 // Vecino mas cercano 4D: evalua los 8 colores de COLOR_TABLE_4D (RGB normalizado + C/50)

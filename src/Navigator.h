@@ -78,6 +78,7 @@ class Navigator {
   uint32_t brakeStartedMs_;
   uint32_t settleStartedMs_;
   uint32_t restStartedMs_;
+  uint32_t lastRestTelemetryMs_;
   bool turnActive_;
   bool turnSlowed_;
   bool turnBraking_;
@@ -91,6 +92,7 @@ class Navigator {
   void startTurn180();
   TurnResult updateTurn();
   void beginTurnBrake();
+  void refreshStationaryTelemetry();
 
  public:
   Navigator();
@@ -101,6 +103,7 @@ class Navigator {
   bool isGoalColorDetected();  // true si el TCS34725 (canal 1) clasifica como Rojo
   void renderOled();           // OLED (canal 5): YAW|Color, F/L/R, paredes, ODO
   Orientation getHeading() const;
+  void restWithTelemetry(uint32_t durationMs);
 };
 
 #endif
