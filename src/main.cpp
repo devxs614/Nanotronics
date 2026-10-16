@@ -232,11 +232,10 @@ void setup() {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 10);
-    display.println(F("  ROBORREGOS PISTA A  "));
-    display.setCursor(0, 30);
-    display.println(F("Iniciando sensores..."));
+    display.setCursor(7, 28);
+    display.print(F("Roborregos starting"));
     display.display();
+    delay(NAV_STARTUP_SPLASH_MS);
   }
 
   // Canal 1 (Color): color.begin() carga la calibracion desde la EEPROM

@@ -49,11 +49,12 @@ constexpr uint8_t IMU_MUX_CHANNEL = 0;
 constexpr uint8_t MPU6050_I2C_ADDR = 0x68;
 constexpr float GYRO_LSB_PER_DPS = 16.4f;       // Configuración +-2000 dps (0x1B = 0x18)
 constexpr float IMU_SCALE_FACTOR = 9.4235f;     // Factor de ganancia empírico (360° test)
-constexpr int16_t TURN_BASE_PWM = 45;           // PWM base para giro ortogonal preciso
-constexpr int16_t TURN_SLOW_PWM = 25;           // PWM en los últimos 15°
+constexpr int16_t TURN_BASE_PWM = 42;           // PWM base para giro ortogonal preciso
+constexpr int16_t TURN_SLOW_PWM = 22;           // PWM en los últimos 15°
 
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.
 constexpr uint32_t NAV_STARTUP_STABILIZE_MS = 4000UL;
+constexpr uint32_t NAV_STARTUP_SPLASH_MS = 1500UL;
 constexpr uint32_t NAV_CELL_REST_MS = 3000UL;
 constexpr uint32_t NAV_REST_TELEMETRY_MS = 200UL;
 
