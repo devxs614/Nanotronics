@@ -40,22 +40,23 @@ namespace {
 
 constexpr int16_t NAV_BASE_PWM = 100;
 constexpr float NAV_DECEL_START_MM = CELL_MM - 50.0f;
-constexpr int16_t NAV_DECEL_END_PWM = 80;
-constexpr int16_t NAV_BRAKE_PWM = 80;
+constexpr int16_t NAV_DECEL_END_PWM = 50;
+constexpr int16_t NAV_BRAKE_PWM = 60;
 constexpr uint32_t NAV_BRAKE_MS = 30UL;
 constexpr uint16_t NAV_STOP_FRONT_MM = 35;
-constexpr float NAV_YAW_LOCK_KP = 3.0f;
+constexpr float NAV_YAW_LOCK_KP = 3.5f;
 constexpr float NAV_CORR_LIMIT = 40.0f;
 constexpr float NAV_MAX_YAW_ABORT_DEG = 30.0f;
 constexpr uint32_t NAV_TIMEOUT_MS = 8000UL;
 
 // Parametros validados en el test de giros IMU.
-constexpr int16_t TURN_PWM = 60;
-constexpr int16_t SLOW_PWM = 35;
-constexpr int16_t BRAKE_PWM = 50;
+constexpr int16_t TURN_PWM = 45;
+constexpr int16_t SLOW_PWM = 25;
+constexpr int16_t BRAKE_PWM = 40;
 constexpr float SLOW_ZONE_DEG = 15.0f;
 constexpr uint32_t BRAKE_MS = 35UL;
 constexpr uint32_t TURN_SETTLE_MS = 50UL;
+constexpr uint32_t TURN_REST_MS = 200UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 6000UL;
 constexpr uint8_t TOF_I2C_ADDRESS = 0x29;
 constexpr uint16_t TOF_MIN_VALID_MM = 30;
@@ -168,13 +169,16 @@ bool advanceOneCell() {
     return false;
   }
   motorController.stop();
-  encoderManager.resetTicks();
-  odometryMm = 0.0f;
   while (Serial.available() > 0) Serial.read();
 
+  // El chasis queda inmovil antes de congelar el rumbo de referencia de esta
+  // casilla. Asi el PID no hereda inercia del movimiento anterior.
+  delay(100);
   lastImuUs = micros();
   updateYaw();
   const float targetYaw = yawDeg;  // Rumbo objetivo = rumbo al iniciar
+  encoderManager.resetTicks();
+  odometryMm = 0.0f;
 
   uint16_t dF = 0, dL = 0, dR = 0;
   Serial.print(F("\n[AVANCE] 1 celda ("));
@@ -226,7 +230,7 @@ bool advanceOneCell() {
       break;
     }
 
-    // Rampa de PWM 100 a 80 en los ultimos 50 mm, manteniendo el yaw lock.
+    // Rampa de PWM 100 a 50 desde los 230 mm, manteniendo el yaw lock.
     if (odometryMm >= NAV_DECEL_START_MM) {
       currentBaseSpeed = map(static_cast<long>(odometryMm), static_cast<long>(NAV_DECEL_START_MM),
                              static_cast<long>(CELL_MM), NAV_BASE_PWM, NAV_DECEL_END_PWM);
@@ -267,6 +271,9 @@ bool advanceOneCell() {
   } else {
     motorController.stop();
   }
+  // Antes del siguiente SCAN el robot permanece totalmente inmovil. Las
+  // mediciones de color, ToF y OLED del siguiente ciclo parten de reposo.
+  delay(200);
   odometryMm = readOdometryMm();
 
   Serial.print(F("[AVANCE] Finalizado por: "));
@@ -297,10 +304,12 @@ Navigator::Navigator()
       turnLastUs_(0),
       brakeStartedMs_(0),
       settleStartedMs_(0),
+      restStartedMs_(0),
       turnActive_(false),
       turnSlowed_(false),
       turnBraking_(false),
-      turnSettling_(false) {
+      turnSettling_(false),
+      turnResting_(false) {
   memset(&redProfile, 0, sizeof(redProfile));
   strcpy(currentColorName, "Desc");
 }
@@ -313,6 +322,7 @@ void Navigator::begin() {
   turnSlowed_ = false;
   turnBraking_ = false;
   turnSettling_ = false;
+  turnResting_ = false;
 
   // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
   // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
@@ -425,6 +435,7 @@ void Navigator::turn90(bool turnLeft, float targetDegrees) {
   turnSlowed_ = false;
   turnBraking_ = false;
   turnSettling_ = false;
+  turnResting_ = false;
 
   const int16_t pwm = turnDirection_ * TURN_PWM;
   motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
@@ -461,6 +472,14 @@ Navigator::TurnResult Navigator::updateTurn() {
   if (turnSettling_) {
     if (millis() - settleStartedMs_ < TURN_SETTLE_MS) return TurnResult::IN_PROGRESS;
     turnSettling_ = false;
+    turnResting_ = true;
+    restStartedMs_ = millis();
+    return TurnResult::IN_PROGRESS;
+  }
+
+  if (turnResting_) {
+    if (millis() - restStartedMs_ < TURN_REST_MS) return TurnResult::IN_PROGRESS;
+    turnResting_ = false;
     turnActive_ = false;
     lastImuUs = micros();
     Serial.print(F("[GIRO] Completado: "));
@@ -718,7 +737,9 @@ void Navigator::update() {
         } else {  // TURN_180
           currentHeading = static_cast<Orientation>((currentHeading + 2) % 4);
         }
-        currentState = ADVANCE;
+        // Un giro ya completó 50 ms de asentamiento y 200 ms inmóvil; ahora
+        // adquiere un SCAN fresco antes de calcular otra decisión de pared.
+        currentState = SCAN;
       } else if (result == TurnResult::FAILED) {
         resetMuxChannel(MUX_CH_IMU);
         Serial.println(F("[NAV] Giro recuperado -> SCAN"));

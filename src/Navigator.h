@@ -77,10 +77,12 @@ class Navigator {
   uint32_t turnLastUs_;
   uint32_t brakeStartedMs_;
   uint32_t settleStartedMs_;
+  uint32_t restStartedMs_;
   bool turnActive_;
   bool turnSlowed_;
   bool turnBraking_;
   bool turnSettling_;
+  bool turnResting_;
 
   Move decideRightWallRule();
   String readDetectedColor(bool& outIsGoal);  // Canal 1: vecino mas cercano sobre COLOR_TABLE
