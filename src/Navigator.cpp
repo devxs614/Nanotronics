@@ -29,7 +29,6 @@ extern float gyroBiasZ;
 extern uint32_t lastImuUs;
 extern float odometryMm;
 extern Adafruit_SSD1306 display;
-extern Navigator navigator;
 
 float wrap180(float angle);
 float updateYaw();
@@ -56,8 +55,8 @@ constexpr int16_t SLOW_PWM = 30;
 constexpr int16_t BRAKE_PWM = 45;
 constexpr float SLOW_ZONE_DEG = 15.0f;
 constexpr uint32_t BRAKE_MS = 35UL;
+constexpr uint32_t TURN_SETTLE_MS = 50UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 6000UL;
-constexpr uint8_t I2C_MUX_ADDRESS = 0x70;
 constexpr uint8_t TOF_I2C_ADDRESS = 0x29;
 constexpr uint16_t TOF_MAX_VALID_MM = 2000;
 constexpr uint32_t TOF_RESPONSE_TIMEOUT_MS = 100UL;
@@ -71,7 +70,6 @@ struct CellStatus {
 uint16_t scanDistF = 0;
 uint16_t scanDistL = 0;
 uint16_t scanDistR = 0;
-uint8_t simultaneousTofZeroCycles = 0;
 bool tofSensorsInitialized = false;
 
 void resetMuxChannel(uint8_t channel) {
@@ -93,7 +91,7 @@ void initializeTofSensors() {
   if (tofSensorsInitialized) return;
 
   // Inicializacion unica: cada VL53L0X comparte 0x29, pero esta aislado por
-  // su canal TCA9548A (F=2, L=3, R=4).
+  // su canal TCA9548A (F=2, L=4, R=3).
   fOk = initializeTofOnce(frontSensor, MUX_CH_FRONT);
   lOk = initializeTofOnce(leftSensor, MUX_CH_LEFT);
   rOk = initializeTofOnce(rightSensor, MUX_CH_RIGHT);
@@ -127,54 +125,12 @@ uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok) 
   return takeFreshMeasurement();
 }
 
-void recoverI2cBus() {
-  Serial.println(F("[I2C] Recuperacion global"));
-  Wire.end();
-  delay(5);
-  Wire.begin();
-  Wire.setClock(100000UL);
-  Wire.setWireTimeout(3000UL, true);
-
-  // Reinicia explicitamente el estado del TCA9548A antes de los nuevos barridos.
-  Wire.beginTransmission(I2C_MUX_ADDRESS);
-  Wire.write(static_cast<uint8_t>(0x00));
-  Wire.endTransmission();
-  delayMicroseconds(100);
-
-  // Wire.end() tambien desconecta logicamente a la OLED. Restablece el
-  // controlador y fuerza el mismo render de cuatro filas usado por la FSM.
-  selectI2CChannel(MUX_CH_OLED);
-  oledOk = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  if (oledOk) {
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    navigator.renderOled();
-  }
-}
-
-void recoverTofBusIfNeeded(uint16_t& distF, uint16_t& distL, uint16_t& distR) {
-  if (distF != 0 || distL != 0 || distR != 0) {
-    simultaneousTofZeroCycles = 0;
-    return;
-  }
-
-  if (++simultaneousTofZeroCycles < 2) return;
-  simultaneousTofZeroCycles = 0;
-  recoverI2cBus();
-
-  // Tras restaurar Wire y el MUX, toma tres mediciones nuevas, no almacenadas.
-  distF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
-  distL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
-  distR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
-}
-
-// Lee F (canal 2), L (canal 3) y R (canal 4). Libre solo si 150 <= dist < 2000;
+// Lee F (canal 2), L (canal 4) y R (canal 3). Libre solo si 150 <= dist < 2000;
 // dist == 0 es un error de lectura y cuenta como PARED.
 CellStatus scanCellWalls() {
   scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
   scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
   scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
-  recoverTofBusIfNeeded(scanDistF, scanDistL, scanDistR);
 
   CellStatus status;
   status.freeFront = (scanDistF >= UMBRAL_PARED_MM && scanDistF < 2000);
@@ -250,7 +206,6 @@ bool advanceOneCell() {
     dF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
     dL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
     dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
-    recoverTofBusIfNeeded(dF, dL, dR);
     odometryMm = readOdometryMm();
 
     if (odometryMm >= CELL_MM) break;
@@ -338,9 +293,11 @@ Navigator::Navigator()
       turnStartedMs_(0),
       turnLastUs_(0),
       brakeStartedMs_(0),
+      settleStartedMs_(0),
       turnActive_(false),
       turnSlowed_(false),
-      turnBraking_(false) {
+      turnBraking_(false),
+      turnSettling_(false) {
   memset(&redProfile, 0, sizeof(redProfile));
   strcpy(currentColorName, "Desc");
 }
@@ -352,6 +309,7 @@ void Navigator::begin() {
   turnActive_ = false;
   turnSlowed_ = false;
   turnBraking_ = false;
+  turnSettling_ = false;
 
   // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
   // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
@@ -463,6 +421,7 @@ void Navigator::turn90(bool turnLeft, float targetDegrees) {
   turnActive_ = true;
   turnSlowed_ = false;
   turnBraking_ = false;
+  turnSettling_ = false;
 
   const int16_t pwm = turnDirection_ * TURN_PWM;
   motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
@@ -491,6 +450,14 @@ Navigator::TurnResult Navigator::updateTurn() {
     if (millis() - brakeStartedMs_ < BRAKE_MS) return TurnResult::IN_PROGRESS;
     motorController.stop();
     turnBraking_ = false;
+    turnSettling_ = true;
+    settleStartedMs_ = millis();
+    return TurnResult::IN_PROGRESS;
+  }
+
+  if (turnSettling_) {
+    if (millis() - settleStartedMs_ < TURN_SETTLE_MS) return TurnResult::IN_PROGRESS;
+    turnSettling_ = false;
     turnActive_ = false;
     lastImuUs = micros();
     Serial.print(F("[GIRO] Completado: "));
@@ -694,14 +661,6 @@ void Navigator::update() {
       }
 
       CellStatus status = scanCellWalls();
-      if (scanDistF == 0 && scanDistL == 0 && scanDistR == 0) {
-        // Antes de que DECIDE pueda interpretar tres fallos como un callejon,
-        // deja respirar el bus y exige un segundo muestreo fresco. El segundo
-        // triple-cero activa la recuperacion global de Wire/MUX/OLED.
-        Serial.println(F("[SCAN] ToF 0/0/0; estabilizando I2C"));
-        delay(150);
-        status = scanCellWalls();
-      }
       freeF = status.freeFront;
       freeL = status.freeLeft;
       freeR = status.freeRight;
