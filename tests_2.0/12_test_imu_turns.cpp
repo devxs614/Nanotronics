@@ -9,8 +9,6 @@
 constexpr uint8_t REG_GYRO_CONFIG = 0x1B;
 constexpr uint8_t REG_PWR_MGMT_1 = 0x6B;
 constexpr uint8_t REG_ACCEL_XOUT_H = 0x3B;
-constexpr float GYRO_LSB_PER_DPS = 16.4f;  // +-2000 dps
-constexpr float IMU_SCALE_FACTOR = 9.4235f;
 constexpr int16_t CAL_SPIN_PWM = 42;
 
 constexpr int16_t TURN_PWM = 50;
