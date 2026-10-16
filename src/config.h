@@ -49,8 +49,8 @@ constexpr uint8_t IMU_MUX_CHANNEL = 0;
 constexpr uint8_t MPU6050_I2C_ADDR = 0x68;
 constexpr float GYRO_LSB_PER_DPS = 16.4f;       // Configuración +-2000 dps (0x1B = 0x18)
 constexpr float IMU_SCALE_FACTOR = 9.4235f;     // Factor de ganancia empírico (360° test)
-constexpr int16_t TURN_BASE_PWM = 50;           // PWM base para giros de 90°
-constexpr int16_t TURN_SLOW_PWM = 30;           // PWM de desaceleración final
+constexpr int16_t TURN_BASE_PWM = 60;           // PWM base suave para giros IMU
+constexpr int16_t TURN_SLOW_PWM = 35;           // PWM en los últimos 15°
 
 #define DEBUG_ENABLED true
 #ifndef COMPETITION_MODE

@@ -38,7 +38,7 @@ bool isWallFree(uint16_t dist);
 
 namespace {
 
-constexpr int16_t NAV_BASE_PWM = 200;
+constexpr int16_t NAV_BASE_PWM = 100;
 constexpr float NAV_DECEL_START_MM = CELL_MM - 50.0f;
 constexpr int16_t NAV_DECEL_END_PWM = 80;
 constexpr int16_t NAV_BRAKE_PWM = 80;
@@ -50,14 +50,15 @@ constexpr float NAV_MAX_YAW_ABORT_DEG = 30.0f;
 constexpr uint32_t NAV_TIMEOUT_MS = 8000UL;
 
 // Parametros validados en el test de giros IMU.
-constexpr int16_t TURN_PWM = 50;
-constexpr int16_t SLOW_PWM = 30;
-constexpr int16_t BRAKE_PWM = 45;
+constexpr int16_t TURN_PWM = 60;
+constexpr int16_t SLOW_PWM = 35;
+constexpr int16_t BRAKE_PWM = 50;
 constexpr float SLOW_ZONE_DEG = 15.0f;
 constexpr uint32_t BRAKE_MS = 35UL;
 constexpr uint32_t TURN_SETTLE_MS = 50UL;
 constexpr uint32_t TURN_TIMEOUT_MS = 6000UL;
 constexpr uint8_t TOF_I2C_ADDRESS = 0x29;
+constexpr uint16_t TOF_MIN_VALID_MM = 30;
 constexpr uint16_t TOF_MAX_VALID_MM = 2000;
 constexpr uint32_t TOF_RESPONSE_TIMEOUT_MS = 100UL;
 
@@ -120,22 +121,24 @@ uint16_t readDistanceSensor(Adafruit_VL53L0X& sensor, uint8_t channel, bool ok) 
     const uint8_t status = sensor.readRangeStatus();
     const bool timedOut = sensor.timeoutOccurred() ||
                           (millis() - startedMs > TOF_RESPONSE_TIMEOUT_MS);
-    return (!timedOut && range > 0 && range <= TOF_MAX_VALID_MM && status == 0) ? range : 0;
+    return (!timedOut && range >= TOF_MIN_VALID_MM && range <= TOF_MAX_VALID_MM && status == 0)
+               ? range
+               : 0;
   };
   return takeFreshMeasurement();
 }
 
-// Lee F (canal 2), L (canal 4) y R (canal 3). Libre solo si 150 <= dist < 2000;
-// dist == 0 es un error de lectura y cuenta como PARED.
+// Lee F (canal 2), L (canal 4) y R (canal 3). El rango fisico aceptado es
+// 30..2000 mm; una muestra 0/fuera de rango es PARED y >=150 mm es LIBRE.
 CellStatus scanCellWalls() {
   scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
   scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
   scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
 
   CellStatus status;
-  status.freeFront = (scanDistF >= UMBRAL_PARED_MM && scanDistF < 2000);
-  status.freeLeft = (scanDistL >= UMBRAL_PARED_MM && scanDistL < 2000);
-  status.freeRight = (scanDistR >= UMBRAL_PARED_MM && scanDistR < 2000);
+  status.freeFront = (scanDistF >= UMBRAL_PARED_MM && scanDistF <= TOF_MAX_VALID_MM);
+  status.freeLeft = (scanDistL >= UMBRAL_PARED_MM && scanDistL <= TOF_MAX_VALID_MM);
+  status.freeRight = (scanDistR >= UMBRAL_PARED_MM && scanDistR <= TOF_MAX_VALID_MM);
   return status;
 }
 
@@ -223,7 +226,7 @@ bool advanceOneCell() {
       break;
     }
 
-    // Rampa de PWM 200 a 80 en los ultimos 50 mm
+    // Rampa de PWM 100 a 80 en los ultimos 50 mm, manteniendo el yaw lock.
     if (odometryMm >= NAV_DECEL_START_MM) {
       currentBaseSpeed = map(static_cast<long>(odometryMm), static_cast<long>(NAV_DECEL_START_MM),
                              static_cast<long>(CELL_MM), NAV_BASE_PWM, NAV_DECEL_END_PWM);
@@ -640,9 +643,9 @@ Orientation Navigator::getHeading() const {
 }
 
 Move Navigator::decideRightWallRule() {
-  if (freeR) return TURN_RIGHT;
-  if (freeF) return FORWARD;
   if (freeL) return TURN_LEFT;
+  if (freeF) return FORWARD;
+  if (freeR) return TURN_RIGHT;
   return TURN_180;
 }
 
