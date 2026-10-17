@@ -1045,9 +1045,19 @@ Orientation Navigator::getHeading() const {
 
 Move Navigator::decideRightWallRule() {
   // Regla estable de celda: frente -> izquierda -> derecha -> retorno.
-  if (freeF) return FORWARD;
-  if (freeL) return TURN_LEFT;
-  if (freeR) return TURN_RIGHT;
+  if (freeF) {
+    Serial.println(F("[DECISION] Prioridad 1: Avanzando de Frente (280 mm)."));
+    return FORWARD;
+  }
+  if (freeL) {
+    Serial.println(F("[DECISION] Prioridad 2: Girando a la Izquierda (-90 grados)."));
+    return TURN_LEFT;
+  }
+  if (freeR) {
+    Serial.println(F("[DECISION] Prioridad 3: Girando a la Derecha (+90 grados)."));
+    return TURN_RIGHT;
+  }
+  Serial.println(F("[DECISION] Prioridad 4: Callejon detectado. Giro de 180 grados."));
   return TURN_180;
 }
 
