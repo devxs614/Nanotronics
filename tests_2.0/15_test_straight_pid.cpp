@@ -137,8 +137,10 @@ void runStraightPid() {
     const float derivative = dt > 0.0005f ? (yawError - lastYawError) / dt : 0.0f;
     float correction = kp * yawError + kd * derivative;
     correction = constrain(correction, -60.0f, 60.0f);
-    const int16_t leftPwm = constrain(BASE_PWM - static_cast<int16_t>(correction), 0, 255);
-    const int16_t rightPwm = constrain(BASE_PWM + static_cast<int16_t>(correction), 0, 255);
+    // El signo se invierte respecto de la primera prueba: yaw positivo debe
+    // sumar al lado izquierdo y restar al derecho para cerrar el lazo.
+    const int16_t leftPwm = constrain(BASE_PWM + static_cast<int16_t>(correction), 40, 160);
+    const int16_t rightPwm = constrain(BASE_PWM - static_cast<int16_t>(correction), 40, 160);
     setForward(leftPwm, rightPwm);
     lastYawError = yawError;
     distanceMm = readOdometryMm();

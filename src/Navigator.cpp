@@ -39,14 +39,10 @@ bool isWallFree(uint16_t dist);
 
 namespace {
 
-constexpr int16_t NAV_BASE_PWM = 100;
-constexpr float NAV_DECEL_START_MM = CELL_MM - 50.0f;
-constexpr int16_t NAV_DECEL_END_PWM = 45;
+constexpr int16_t NAV_DECEL_END_PWM = 50;
 constexpr int16_t NAV_BRAKE_PWM = 60;
 constexpr uint32_t NAV_BRAKE_MS = 35UL;
 constexpr uint16_t NAV_STOP_FRONT_MM = 35;
-constexpr float NAV_YAW_LOCK_KP = 4.0f;
-constexpr float NAV_CORR_LIMIT = 40.0f;
 constexpr float NAV_MAX_YAW_ABORT_DEG = 30.0f;
 constexpr uint32_t NAV_TIMEOUT_MS = 8000UL;
 
@@ -160,9 +156,9 @@ void reverseBrake(const int16_t speeds[4], uint32_t durationMs) {
   motorController.stop();
 }
 
-// Avanza una celda (280 mm) con yaw lock IMU proporcional.
+// Avanza una celda con el PID recto calibrado (Kp=4.0, Kd=0.0).
 // Un fallo recuperable devuelve false para volver a SCAN; nunca detiene la FSM.
-bool advanceOneCell() {
+bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   if (!imuFound) {
     resetMuxChannel(MUX_CH_IMU);
     Serial.println(F("[AVANCE] IMU recuperando -> SCAN"));
@@ -179,17 +175,20 @@ bool advanceOneCell() {
   const float targetYaw = yawDeg;  // Rumbo objetivo = rumbo al iniciar
   encoderManager.resetTicks();
   odometryMm = 0.0f;
+  float lastYawError = 0.0f;
+  uint32_t lastControlUs = micros();
+  const float decelStartMm = targetDistanceMm - 50.0f;
 
   uint16_t dF = 0, dL = 0, dR = 0;
   Serial.print(F("\n[AVANCE] 1 celda ("));
-  Serial.print(CELL_MM, 0);
+  Serial.print(targetDistanceMm, 0);
   Serial.println(F(" mm), IMU yaw lock"));
 
   const uint32_t startMs = millis();
   uint32_t lastLogMs = 0;
   bool activeBrake = true;
   bool completed = true;
-  int16_t currentBaseSpeed = NAV_BASE_PWM;
+  int16_t currentBaseSpeed = NAV_STRAIGHT_BASE_PWM;
   const __FlashStringHelper* reason = F("Odometria");
 
   while (true) {
@@ -215,7 +214,7 @@ bool advanceOneCell() {
     dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
     odometryMm = readOdometryMm();
 
-    if (odometryMm >= CELL_MM) break;
+    if (odometryMm >= targetDistanceMm) break;
     if (dF > 0 && dF <= NAV_STOP_FRONT_MM) {
       reason = F("Pared frontal");
       break;
@@ -230,23 +229,29 @@ bool advanceOneCell() {
       break;
     }
 
-    // Rampa de PWM 100 a 45 desde los 230 mm, manteniendo el yaw lock.
-    if (odometryMm >= NAV_DECEL_START_MM) {
-      currentBaseSpeed = map(static_cast<long>(odometryMm), static_cast<long>(NAV_DECEL_START_MM),
-                             static_cast<long>(CELL_MM), NAV_BASE_PWM, NAV_DECEL_END_PWM);
-      currentBaseSpeed = constrain(currentBaseSpeed, NAV_DECEL_END_PWM, NAV_BASE_PWM);
+    // Rampa de PWM 100 a 50 desde los 230 mm, manteniendo el yaw lock.
+    if (odometryMm >= decelStartMm) {
+      currentBaseSpeed = map(static_cast<long>(odometryMm), static_cast<long>(decelStartMm),
+                             static_cast<long>(targetDistanceMm), NAV_STRAIGHT_BASE_PWM, NAV_DECEL_END_PWM);
+      currentBaseSpeed = constrain(currentBaseSpeed, NAV_DECEL_END_PWM, NAV_STRAIGHT_BASE_PWM);
     } else {
-      currentBaseSpeed = NAV_BASE_PWM;
+      currentBaseSpeed = NAV_STRAIGHT_BASE_PWM;
     }
 
-    // PWM 100 corresponde al avance lineal calibrado de MecanumDrive; el
-    // ajuste diferencial conserva ese rumbo mientras aplica el yaw lock.
-    float correction = NAV_YAW_LOCK_KP * yawError;
-    correction = constrain(correction, -NAV_CORR_LIMIT, NAV_CORR_LIMIT);
-    const int16_t leftPwm = constrain(currentBaseSpeed - static_cast<int16_t>(correction), 0, 255);
-    const int16_t rightPwm = constrain(currentBaseSpeed + static_cast<int16_t>(correction), 0, 255);
+    // Signo validado en Test 15: yaw positivo suma a la izquierda y resta a
+    // la derecha. Kd queda en 0.0, pero se conserva la forma PD calibrable.
+    const uint32_t nowUs = micros();
+    const float controlDt = (nowUs - lastControlUs) * 0.000001f;
+    lastControlUs = nowUs;
+    const float derivative = controlDt > 0.0005f
+                                 ? (yawError - lastYawError) / controlDt
+                                 : 0.0f;
+    const float correction = KP_STRAIGHT * yawError + KD_STRAIGHT * derivative;
+    const int16_t leftPwm = constrain(currentBaseSpeed + static_cast<int16_t>(correction), 40, 160);
+    const int16_t rightPwm = constrain(currentBaseSpeed - static_cast<int16_t>(correction), 40, 160);
     motorController.setSpeeds(leftPwm, rightPwm, leftPwm, rightPwm);
     motorController.update();
+    lastYawError = yawError;
 
     if (now - lastLogMs >= 100UL) {
       lastLogMs = now;
@@ -261,7 +266,7 @@ bool advanceOneCell() {
       Serial.print(F(" | "));
       Serial.print(odometryMm, 1);
       Serial.print(F("/"));
-      Serial.print(CELL_MM, 0);
+      Serial.print(targetDistanceMm, 0);
       Serial.println(F(" mm"));
     }
   }

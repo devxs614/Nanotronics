@@ -52,6 +52,11 @@ constexpr float IMU_SCALE_FACTOR = 9.4235f;     // Factor de ganancia empírico 
 constexpr int16_t TURN_BASE_PWM = 40;           // PWM base para giro ortogonal preciso
 constexpr int16_t TURN_SLOW_PWM = 22;           // PWM en los últimos 15°
 
+// Avance recto calibrado por tests_2.0/15_test_straight_pid.cpp.
+constexpr float KP_STRAIGHT = 4.0f;
+constexpr float KD_STRAIGHT = 0.0f;
+constexpr int16_t NAV_STRAIGHT_BASE_PWM = 100;
+
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.
 constexpr uint32_t NAV_STARTUP_STABILIZE_MS = 4000UL;
 constexpr uint32_t NAV_STARTUP_SPLASH_MS = 1500UL;

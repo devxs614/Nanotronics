@@ -22,13 +22,14 @@ float gyroBiasZ = 0.0f;
 float imuScaleFactor = IMU_SCALE_FACTOR;
 uint16_t brakeMs = 35;
 float yawDeg = 0.0f;
+uint32_t imuI2cFailures = 0;
 
 bool writeRegister(uint8_t address, uint8_t reg, uint8_t value) {
   Wire.beginTransmission(address); Wire.write(reg); Wire.write(value);
   return Wire.endTransmission() == 0;
 }
 
-bool readGyroZ(int16_t& gz) {
+bool readGyroZOnce(int16_t& gz) {
   uint8_t data[14];
   Wire.beginTransmission(imuAddr);
   Wire.write(REG_ACCEL_XOUT_H);
@@ -37,6 +38,29 @@ bool readGyroZ(int16_t& gz) {
   for (uint8_t i = 0; i < 14; ++i) data[i] = Wire.read();
   gz = static_cast<int16_t>((data[12] << 8) | data[13]);
   return true;
+}
+
+bool readGyroZ(int16_t& gz) {
+  // El giro deja el MUX en el canal 0. Ante un NACK o lectura incompleta se
+  // deselecciona/reselecciona limpiamente el mismo canal y se reintenta una vez.
+  if (readGyroZOnce(gz)) return true;
+
+  ++imuI2cFailures;
+  static uint32_t lastDebugMs = 0;
+  if (millis() - lastDebugMs >= 250UL) {
+    lastDebugMs = millis();
+    Serial.print(F("[I2C IMU] fallo #"));
+    Serial.print(imuI2cFailures);
+    Serial.println(F("; reintentando Canal 0"));
+  }
+
+  selectI2CChannel(IMU_MUX_CHANNEL);
+  delayMicroseconds(300);
+  if (readGyroZOnce(gz)) {
+    Serial.println(F("[I2C IMU] lectura recuperada"));
+    return true;
+  }
+  return false;
 }
 
 bool initImu() {
@@ -66,8 +90,13 @@ void calibrateBias() {
 }
 
 void setTurnPwm(bool left, int16_t pwm) {
-  const int16_t direction = left ? pwm : -pwm;
-  motorController.setSpeeds(-direction, direction, -direction, direction);
+  if (left) {
+    // IZQUIERDA (-90°): M1/M3 atrás, M2/M4 adelante.
+    motorController.setSpeeds(-pwm, pwm, -pwm, pwm);
+  } else {
+    // DERECHA (+90°): patrón inverso.
+    motorController.setSpeeds(pwm, -pwm, pwm, -pwm);
+  }
   motorController.update();
 }
 
@@ -100,6 +129,10 @@ void executeImuTurn(bool turnLeft, float targetDegrees) {
         yawDeg += delta;
         turnedAngle += fabs(delta);
       }
+    } else {
+      // Vuelve a dejar explícitamente la IMU como único canal antes de la
+      // siguiente iteración; no se toca OLED ni otro periférico en este giro.
+      selectI2CChannel(IMU_MUX_CHANNEL);
     }
     if (!slow && turnedAngle >= targetDegrees - SLOW_ZONE_DEG) {
       slow = true;
