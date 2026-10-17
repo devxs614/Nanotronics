@@ -1044,20 +1044,20 @@ Orientation Navigator::getHeading() const {
 }
 
 Move Navigator::decideRightWallRule() {
-  // Regla estable de celda: frente -> izquierda -> derecha -> retorno.
+  // Mano derecha estricta: derecha -> frente -> izquierda -> retorno.
+  if (freeR) {
+    Serial.println(F("[PARED DERECHA PERFECTA] Prioridad 1: Derecha Libre ('L'). Ejecutando giro +90 grados a la derecha."));
+    return TURN_RIGHT;
+  }
   if (freeF) {
-    Serial.println(F("[DECISION] Prioridad 1: Avanzando de Frente (280 mm)."));
+    Serial.println(F("[PARED DERECHA PERFECTA] Prioridad 2: Derecha Bloqueada ('B'), Frente Libre ('L'). Avanzando de frente."));
     return FORWARD;
   }
   if (freeL) {
-    Serial.println(F("[DECISION] Prioridad 2: Girando a la Izquierda (-90 grados)."));
+    Serial.println(F("[PARED DERECHA PERFECTA] Prioridad 3: Derecha y Frente Bloqueados ('B'), Izquierda Libre ('L'). Girando -90 grados a la izquierda."));
     return TURN_LEFT;
   }
-  if (freeR) {
-    Serial.println(F("[DECISION] Prioridad 3: Girando a la Derecha (+90 grados)."));
-    return TURN_RIGHT;
-  }
-  Serial.println(F("[DECISION] Prioridad 4: Callejon detectado. Giro de 180 grados."));
+  Serial.println(F("[PARED DERECHA PERFECTA] Prioridad 4: Callejon detectado. Giro de 180 grados."));
   return TURN_180;
 }
 
@@ -1280,7 +1280,7 @@ void Navigator::updateTrackB() {
       checkAndRecoverFrontZero();
       // checkAndRecoverFrontZero() puede haber reposicionado el chasis y
       // reemplazado las tres distancias; reconstruir TODO el estado antes de
-      // aplicar la navegacion laser Frente -> Izquierda -> Derecha.
+      // aplicar la navegacion de mano derecha Derecha -> Frente -> Izquierda.
       status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
       status.freeLeft = scanDistL == 0 || scanDistL >= UMBRAL_PARED_MM;
       status.freeRight = scanDistR == 0 || scanDistR >= UMBRAL_PARED_MM;
@@ -1290,7 +1290,7 @@ void Navigator::updateTrackB() {
 
       if (trackBState_ == TrackBState::SECTION1_EXPLORE) {
         const Move move = decideRightWallRule();
-        Serial.print(F("[PISTA B - SEC1] Regla laser F->L->R: "));
+        Serial.print(F("[PISTA B - SEC1] Mano derecha R->F->L: "));
         if (move == FORWARD) Serial.println(F("ADELANTE"));
         else if (move == TURN_RIGHT) Serial.println(F("GIRO DERECHA"));
         else if (move == TURN_LEFT) Serial.println(F("GIRO IZQUIERDA"));
@@ -1356,7 +1356,7 @@ void Navigator::updateTrackB() {
       const Move move = decideRightWallRule();
       Serial.print(F("[PISTA B - SEC3] Color OLED: "));
       Serial.print(trackColorName(currentTrackColor_));
-      Serial.print(F(" | Regla laser F->L->R: "));
+      Serial.print(F(" | Mano derecha R->F->L: "));
       if (move == FORWARD) Serial.println(F("ADELANTE"));
       else if (move == TURN_LEFT) Serial.println(F("GIRO IZQUIERDA"));
       else if (move == TURN_RIGHT) Serial.println(F("GIRO DERECHA"));
