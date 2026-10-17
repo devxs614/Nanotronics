@@ -63,6 +63,9 @@ class Navigator {
   TrackBState trackBState_ = TrackBState::SECTION1_EXPLORE;
   TrackBState trackBAfterTurn_ = TrackBState::SECTION1_EXPLORE;
   Move trackBMove_ = FORWARD;
+  // Rumbo de entrada a la Seccion 3: define el Norte absoluto de la pista.
+  Orientation section3ReferenceHeading_ = NORTH;
+  bool section3ReferenceLocked_ = false;
   uint16_t trackBScore_ = 0;
   uint16_t qtrPeak_ = 0;
   uint32_t trackBLastScanMs_ = 0;
@@ -110,7 +113,7 @@ class Navigator {
   uint32_t turn180PauseStartedMs_;
 
   Move decideRightWallRule();
-  TrackColor readDetectedColor();  // Canal 1: clasificador 5D RGB+Clear+intensidad 1-NN
+  TrackColor readDetectedColor();  // Canal 1: clasificador 5D RGB+Clear+intensidad 1-NN ponderado
   void calibrateGyroBias();
   void turn90(bool turnLeft, float targetDegrees = 90.0f);
   void startTurn180();

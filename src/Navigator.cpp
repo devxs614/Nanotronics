@@ -414,6 +414,8 @@ void Navigator::begin() {
   trackBState_ = TrackBState::SECTION1_EXPLORE;
   trackBAfterTurn_ = TrackBState::SECTION1_EXPLORE;
   trackBMove_ = FORWARD;
+  section3ReferenceHeading_ = NORTH;
+  section3ReferenceLocked_ = false;
   trackBScore_ = 0;
   qtrPeak_ = 0;
   trackBLastScanMs_ = 0;
@@ -967,7 +969,9 @@ TrackColor Navigator::readDetectedColor() {
     const float db = nb - profile.bNorm;
     const float dc = cRatio - profile.cRatio;
     const float di = intensityNorm - profile.intensityNorm;
-    const float dist = sqrt(dr * dr + dg * dg + db * db + dc * dc + di * di);
+    const float dist = sqrt(dr * dr + dg * dg + db * db +
+                            COLOR_5D_CLEAR_WEIGHT * dc * dc +
+                            COLOR_5D_INTENSITY_WEIGHT * di * di);
     if (dist < minDistance) {
       minDistance = dist;
       bestIndex = i;
@@ -1044,9 +1048,9 @@ Orientation Navigator::getHeading() const {
 }
 
 Move Navigator::decideRightWallRule() {
-  // Frente preferente: solo gira si continuar recto no es posible.
-  if (freeF) return FORWARD;
+  // Pared derecha preferente para Piso, Verde, Lima y navegacion general.
   if (freeR) return TURN_RIGHT;
+  if (freeF) return FORWARD;
   if (freeL) return TURN_LEFT;
   return TURN_180;
 }
@@ -1270,7 +1274,7 @@ void Navigator::updateTrackB() {
       checkAndRecoverFrontZero();
       // checkAndRecoverFrontZero() puede haber reposicionado el chasis y
       // reemplazado las tres distancias; reconstruir TODO el estado antes de
-      // aplicar la navegacion frente-preferente.
+      // aplicar la navegacion de pared derecha preferente.
       status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
       status.freeLeft = scanDistL == 0 || scanDistL >= UMBRAL_PARED_MM;
       status.freeRight = scanDistR == 0 || scanDistR >= UMBRAL_PARED_MM;
@@ -1285,7 +1289,7 @@ void Navigator::updateTrackB() {
         Serial.println(F("[PISTA B] Checkpoint Rojo Seccion 1 detectado. Transicionando a Seccion 2..."));
       } else if (trackBState_ == TrackBState::SECTION1_EXPLORE) {
         const Move move = decideRightWallRule();
-        Serial.print(F("[PISTA B - SEC1] Frente preferente: "));
+        Serial.print(F("[PISTA B - SEC1] Pared derecha: "));
         if (move == FORWARD) Serial.println(F("ADELANTE"));
         else if (move == TURN_RIGHT) Serial.println(F("GIRO DERECHA"));
         else if (move == TURN_LEFT) Serial.println(F("GIRO IZQUIERDA"));
@@ -1326,8 +1330,13 @@ void Navigator::updateTrackB() {
         motorController.stop();
         motorController.update();
         trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
+        // El rumbo al cruzar el checkpoint define el Norte (0°) de la pista
+        // para todas las instrucciones direccionales de la Seccion 3.
+        snapYawToNearest90();
+        section3ReferenceHeading_ = currentHeading;
+        section3ReferenceLocked_ = true;
         trackBState_ = TrackBState::SECTION3_SCAN;
-        Serial.println(F("[PISTA B - SEC2] Checkpoint Rojo alcanzado. Transicionando a Seccion 3."));
+        Serial.println(F("[PISTA B - SEC2] Checkpoint Rojo alcanzado. Referencia de Seccion 3 fijada."));
       } else {
         trackBState_ = TrackBState::SECTION2_ADVANCE;
       }
@@ -1346,26 +1355,72 @@ void Navigator::updateTrackB() {
         motorController.stop();
         trackBState_ = TrackBState::FINISHED;
         currentState = STOP;
-        Serial.print(F("[PISTA B] Checkpoint final. Puntuacion: "));
+        Serial.print(F("[SECCION 3] META ALCANZADA. Puntuacion: "));
         Serial.println(trackBScore_);
         renderOled();
         break;
       }
 
-      int8_t desiredHeading = -1;
-      if (currentTrackColor_ == COLOR_CYAN) desiredHeading = EAST;
-      else if (currentTrackColor_ == COLOR_YELLOW) desiredHeading = WEST;
-      else if (currentTrackColor_ == COLOR_ORANGE) desiredHeading = NORTH;
-      else if (currentTrackColor_ == COLOR_PINK) desiredHeading = SOUTH;
+      // Una entrada directa a esta seccion tambien conserva una referencia
+      // valida, aun si no se produjo por el checkpoint normal de Seccion 2.
+      if (!section3ReferenceLocked_) {
+        snapYawToNearest90();
+        section3ReferenceHeading_ = currentHeading;
+        section3ReferenceLocked_ = true;
+      }
 
-      if (desiredHeading < 0) {
-        Serial.println(F("[PISTA B][SEC 3] Baldosa sin direccion; esperando lectura nueva."));
+      int8_t trackTurnOffset = -1;
+      int16_t targetTrackAngle = 0;
+      if (currentTrackColor_ == COLOR_CYAN) {
+        trackTurnOffset = 1;
+        targetTrackAngle = 90;
+      } else if (currentTrackColor_ == COLOR_YELLOW) {
+        trackTurnOffset = 3;
+        targetTrackAngle = -90;
+      } else if (currentTrackColor_ == COLOR_ORANGE) {
+        trackTurnOffset = 0;
+        targetTrackAngle = 0;
+      } else if (currentTrackColor_ == COLOR_PINK) {
+        trackTurnOffset = 2;
+        targetTrackAngle = 180;
+      }
+
+      if (trackTurnOffset < 0) {
+        // Piso, Verde y Lima no codifican una direccion: toman la regla de
+        // pared derecha con distancias ToF actuales y recuperacion de falso 0.
+        CellStatus status = scanCellWalls();
+        checkAndRecoverFrontZero();
+        status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
+        status.freeLeft = scanDistL == 0 || scanDistL >= UMBRAL_PARED_MM;
+        status.freeRight = scanDistR == 0 || scanDistR >= UMBRAL_PARED_MM;
+        freeF = status.freeFront;
+        freeL = status.freeLeft;
+        freeR = status.freeRight;
+        const Move move = decideRightWallRule();
+        Serial.print(F("[SECCION 3] Color neutral: "));
+        Serial.print(trackColorName(currentTrackColor_));
+        Serial.print(F(" | Pared derecha: "));
+        if (move == FORWARD) Serial.println(F("ADELANTE"));
+        else if (move == TURN_RIGHT) Serial.println(F("DERECHA"));
+        else if (move == TURN_LEFT) Serial.println(F("IZQUIERDA"));
+        else Serial.println(F("180"));
+
+        if (move == FORWARD) trackBState_ = TrackBState::SECTION3_ADVANCE;
+        else startTrackBTurn(move, TrackBState::SECTION3_ADVANCE);
         renderOled();
         break;
       }
 
+      snapYawToNearest90();
+      const uint8_t desiredHeading =
+          (static_cast<uint8_t>(section3ReferenceHeading_) +
+           static_cast<uint8_t>(trackTurnOffset)) % 4U;
       const uint8_t relative =
-          (static_cast<uint8_t>(desiredHeading) + 4U - static_cast<uint8_t>(currentHeading)) % 4U;
+          (desiredHeading + 4U - static_cast<uint8_t>(currentHeading)) % 4U;
+      Serial.print(F("[SECCION 3] Color: "));
+      Serial.print(trackColorName(currentTrackColor_));
+      Serial.print(F(" | Angulo Pista Objetivo: "));
+      Serial.println(targetTrackAngle);
       if (relative == 0) {
         trackBState_ = TrackBState::SECTION3_ADVANCE;
       } else if (relative == 1) {
