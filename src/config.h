@@ -278,18 +278,18 @@ struct ColorProfile5D {
   float intensityNorm;
 };
 
-constexpr float COLOR_FLOOR_RGB_INTENSITY = 47.0f;
+constexpr float COLOR_FLOOR_RGB_INTENSITY = 14.0f;
 constexpr float COLOR_5D_CLEAR_WEIGHT = 2.0f;
 constexpr float COLOR_5D_INTENSITY_WEIGHT = 2.0f;
 constexpr ColorProfile5D COLOR_PROFILES_5D[] = {
-  {COLOR_CYAN,   "CIAN",     0.3125f, 0.3750f, 0.3125f, 0.7500f, 0.3404f},
-  {COLOR_YELLOW, "AMARILLO", 0.4583f, 0.3333f, 0.2083f, 0.8333f, 0.5106f},
-  {COLOR_ORANGE, "NARANJA",  0.5789f, 0.2632f, 0.1579f, 0.7895f, 0.4043f},
-  {COLOR_PINK,   "ROSA",     0.6364f, 0.1818f, 0.1818f, 0.9394f, 0.7021f},
+  {COLOR_CYAN,   "CIAN",     0.2857f, 0.4286f, 0.2857f, 0.7143f, 0.5000f},
+  {COLOR_YELLOW, "AMARILLO", 0.4545f, 0.3636f, 0.1818f, 0.8182f, 0.7857f},
+  {COLOR_ORANGE, "NARANJA",  0.5000f, 0.3000f, 0.2000f, 0.7000f, 0.7143f},
+  {COLOR_PINK,   "ROSA",     0.5455f, 0.2727f, 0.1818f, 0.8182f, 0.7857f},
   {COLOR_RED,    "ROJO",     0.6400f, 0.2000f, 0.1600f, 0.8000f, 0.5319f},
-  {COLOR_GREEN,  "VERDE",    0.3636f, 0.3636f, 0.2727f, 0.7273f, 0.2340f},
-  {COLOR_FLOOR,  "PISO",     0.4468f, 0.3404f, 0.2128f, 0.9362f, 1.0000f},
-  {COLOR_LIME,   "LIMA",     0.4211f, 0.3684f, 0.2105f, 0.8421f, 0.4043f}
+  {COLOR_GREEN,  "VERDE",    0.3333f, 0.3333f, 0.3333f, 0.6667f, 0.4286f},
+  {COLOR_FLOOR,  "PISO",     0.4286f, 0.3571f, 0.2143f, 0.8571f, 1.0000f},
+  {COLOR_LIME,   "LIMA",     0.4211f, 0.3684f, 0.2105f, 0.8421f, 1.3571f}
 };
 constexpr uint8_t COLOR_PROFILE_5D_COUNT =
     sizeof(COLOR_PROFILES_5D) / sizeof(COLOR_PROFILES_5D[0]);
