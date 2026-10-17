@@ -235,7 +235,7 @@ constexpr float TICKS_PER_MM = 2.6442f;
 
 constexpr uint8_t TCS34725_I2C_ADDRESS = 0x29;
 
-// Colores de pista reconocidos por la clasificacion 4D del TCS34725.
+// Colores de pista reconocidos por el clasificador RGB normalizado del TCS34725.
 // Piso es neutro: se muestra, pero no modifica el checklist obligatorio.
 enum TrackColor : uint8_t {
   COLOR_FLOOR,
@@ -247,6 +247,28 @@ enum TrackColor : uint8_t {
   COLOR_RED,
   COLOR_LIME
 };
+
+// Centroides RGB normalizados de la calibracion de pista. El clasificador 1-NN
+// siempre asigna el perfil con menor distancia euclidiana cuando hay senal.
+struct ColorCentroidRgb {
+  TrackColor color;
+  float rNorm;
+  float gNorm;
+  float bNorm;
+};
+
+constexpr ColorCentroidRgb COLOR_CENTROIDS[] = {
+  {COLOR_CYAN,   0.312f, 0.375f, 0.312f},
+  {COLOR_YELLOW, 0.458f, 0.333f, 0.208f},
+  {COLOR_ORANGE, 0.579f, 0.263f, 0.158f},
+  {COLOR_PINK,   0.636f, 0.182f, 0.182f},
+  {COLOR_RED,    0.640f, 0.200f, 0.160f},
+  {COLOR_GREEN,  0.364f, 0.364f, 0.273f},
+  {COLOR_FLOOR,  0.447f, 0.340f, 0.213f},
+  {COLOR_LIME,   0.421f, 0.368f, 0.211f}
+};
+constexpr uint8_t COLOR_CENTROID_COUNT =
+    sizeof(COLOR_CENTROIDS) / sizeof(COLOR_CENTROIDS[0]);
 
 constexpr uint8_t MPU6050_I2C_ADDRESS = 0x68;
 constexpr uint8_t VL53_FRONT_ADDRESS = 0x30;

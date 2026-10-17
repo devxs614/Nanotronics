@@ -37,26 +37,6 @@ struct ColorProfile {
   bool valid;
 };
 
-// Perfiles RGB normalizados obtenidos de la calibracion de la pista.
-struct ColorRefRgb {
-  TrackColor color;
-  const char* name;
-  float normR, normG, normB;
-  float threshold;
-};
-
-const ColorRefRgb COLOR_TABLE_RGB[] = {
-  {COLOR_CYAN,   "CIAN",       0.312f, 0.375f, 0.312f, 0.033f},
-  {COLOR_YELLOW, "AMARILLO",   0.458f, 0.333f, 0.208f, 0.007f},
-  {COLOR_ORANGE, "NARANJA",    0.579f, 0.263f, 0.158f, 0.044f},
-  {COLOR_PINK,   "ROSA",       0.636f, 0.182f, 0.182f, 0.014f},
-  {COLOR_RED,    "ROJO",       0.640f, 0.200f, 0.160f, 0.014f},
-  {COLOR_GREEN,  "VERDE",      0.364f, 0.364f, 0.273f, 0.033f},
-  {COLOR_FLOOR,  "PISO",       0.447f, 0.340f, 0.213f, 0.007f},
-  {COLOR_LIME,   "VERDE LIMA", 0.421f, 0.368f, 0.211f, 0.019f}
-};
-constexpr uint8_t COLOR_TABLE_RGB_SIZE = sizeof(COLOR_TABLE_RGB) / sizeof(COLOR_TABLE_RGB[0]);
-
 enum State { SCAN, DECIDE, TURN, ADVANCE, STOP };
 enum Move { FORWARD, TURN_RIGHT, TURN_LEFT, TURN_180, ACTION_STOP };
 enum Orientation { NORTH = 0, EAST = 1, SOUTH = 2, WEST = 3 };
@@ -114,7 +94,7 @@ class Navigator {
   uint32_t turn180PauseStartedMs_;
 
   Move decideRightWallRule();
-  TrackColor readDetectedColor();  // Canal 1: vecino mas cercano 4D sobre COLOR_TABLE
+  TrackColor readDetectedColor();  // Canal 1: clasificador RGB 1-NN sobre COLOR_CENTROIDS
   void calibrateGyroBias();
   void turn90(bool turnLeft, float targetDegrees = 90.0f);
   void startTurn180();

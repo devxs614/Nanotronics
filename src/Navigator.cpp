@@ -845,8 +845,8 @@ void Navigator::restWithTelemetry(uint32_t durationMs) {
   motorController.stop();
 }
 
-// Clasificacion por menor distancia euclidiana RGB contra los ocho perfiles
-// exactos de pista. Piso y una muestra fuera de todos los umbrales son neutros.
+// Clasificacion 1-NN por menor distancia euclidiana RGB contra los ocho
+// centroides de pista. Solo una muestra sin senal se considera Piso de entrada.
 TrackColor Navigator::readDetectedColor() {
   selectI2CChannel(MUX_CH_COLOR);
   delay(2);
@@ -856,19 +856,21 @@ TrackColor Navigator::readDetectedColor() {
   const uint16_t rawB = color.latestReading.b;
   const uint16_t rawC = color.latestReading.c;
 
-  if (rawC < 5) return COLOR_FLOOR;
-
   const float sum = static_cast<float>(rawR) + rawG + rawB;
-  if (sum <= 0.0f) return COLOR_FLOOR;
+  if (sum < 5.0f || rawC < 3) {
+    Serial.println(F("[COLOR] PISO | sin señal"));
+    return COLOR_FLOOR;
+  }
+
   const float nr = rawR / sum;
   const float ng = rawG / sum;
   const float nb = rawB / sum;
   float minDistance = 999.0f;
-  int bestIndex = -1;
-  for (uint8_t i = 0; i < COLOR_TABLE_RGB_SIZE; i++) {
-    const float dr = nr - COLOR_TABLE_RGB[i].normR;
-    const float dg = ng - COLOR_TABLE_RGB[i].normG;
-    const float db = nb - COLOR_TABLE_RGB[i].normB;
+  uint8_t bestIndex = 0;
+  for (uint8_t i = 0; i < COLOR_CENTROID_COUNT; i++) {
+    const float dr = nr - COLOR_CENTROIDS[i].rNorm;
+    const float dg = ng - COLOR_CENTROIDS[i].gNorm;
+    const float db = nb - COLOR_CENTROIDS[i].bNorm;
     const float dist = sqrt(dr * dr + dg * dg + db * db);
     if (dist < minDistance) {
       minDistance = dist;
@@ -876,11 +878,12 @@ TrackColor Navigator::readDetectedColor() {
     }
   }
 
-  if (bestIndex != -1 && minDistance <= COLOR_TABLE_RGB[bestIndex].threshold) {
-    const TrackColor detected = COLOR_TABLE_RGB[bestIndex].color;
-    return detected == COLOR_FLOOR ? COLOR_FLOOR : detected;
-  }
-  return COLOR_FLOOR;
+  const TrackColor detected = COLOR_CENTROIDS[bestIndex].color;
+  Serial.print(F("[COLOR] "));
+  Serial.print(trackColorName(detected));
+  Serial.print(F(" | d_min: "));
+  Serial.println(minDistance, 4);
+  return detected;
 }
 
 bool Navigator::isGoalColorDetected() {
