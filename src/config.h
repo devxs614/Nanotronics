@@ -49,7 +49,7 @@ enum TrackMode : uint8_t {
 #endif
 
 // Odometría y Dimensiones de Celda
-constexpr float CELL_MM = 300.0f;               // 30 cm reales por casilla
+constexpr float CELL_MM = 280.0f;               // 28 cm reales por casilla
 
 // Geometría y Umbrales de Pared
 constexpr uint16_t UMBRAL_PARED_MM = 180;       // Pared si 1 <= d < 180 mm; 0 = libre
@@ -182,7 +182,7 @@ constexpr float TICKS_PER_MM = 2.6442f;
 #define FRONT_STOP_MM 150.0f
 #define WALL_TARGET_MM 220.0f
 #define TURN_CLEARANCE_MM 150.0f
-#define MOVE_ONE_CELL_MM 300.0f
+#define MOVE_ONE_CELL_MM 280.0f
 
 #define COLOR_CONFIRM_SAMPLES 3
 #define COLOR_CLEAR_MIN 120

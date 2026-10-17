@@ -197,9 +197,6 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   float lastYawError = 0.0f;
   uint32_t lastControlUs = micros();
   const float decelStartMm = targetDistanceMm - 50.0f;
-  // Una vez activada la ruta por color, el avance conserva exactamente el PID
-  // calibrado, pero no vuelve a consultar ni a usar las paredes ToF.
-  const bool useTofWalls = !navigator.isColorPathActive();
 
   uint16_t dF = 0, dL = 0, dR = 0;
   Serial.print(F("\n[AVANCE] 1 celda ("));
@@ -231,11 +228,9 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
     }
 
     updateYaw();
-    if (useTofWalls) {
-      dF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
-      dL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
-      dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
-    }
+    dF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+    dL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
+    dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
     odometryMm = readOdometryMm();
 
     if (odometryMm >= targetDistanceMm) break;
@@ -249,7 +244,7 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
       navigator.triggerStuckRecovery();
       break;
     }
-    if (useTofWalls && dF > 0 && dF <= NAV_STOP_FRONT_MM) {
+    if (dF > 0 && dF <= NAV_STOP_FRONT_MM) {
       reason = F("Pared frontal");
       break;
     }
@@ -263,7 +258,7 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
       break;
     }
 
-    // Rampa de PWM 100 a 50 desde los 250 mm, manteniendo el yaw lock.
+    // Rampa de PWM 100 a 50 desde los 230 mm, manteniendo el yaw lock.
     if (odometryMm >= decelStartMm) {
       currentBaseSpeed = map(static_cast<long>(odometryMm), static_cast<long>(decelStartMm),
                              static_cast<long>(targetDistanceMm), NAV_STRAIGHT_BASE_PWM, NAV_DECEL_END_PWM);
@@ -291,16 +286,12 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
       lastLogMs = now;
       Serial.print(F("[AVANCE] YAW:"));
       Serial.print(yawDeg - targetYaw, 1);
-      if (useTofWalls) {
-        Serial.print(F(" F:"));
-        Serial.print(dF);
-        Serial.print(F(" L:"));
-        Serial.print(dL);
-        Serial.print(F(" R:"));
-        Serial.print(dR);
-      } else {
-        Serial.print(F(" | RUTA COLOR"));
-      }
+      Serial.print(F(" F:"));
+      Serial.print(dF);
+      Serial.print(F(" L:"));
+      Serial.print(dL);
+      Serial.print(F(" R:"));
+      Serial.print(dR);
       Serial.print(F(" | "));
       Serial.print(odometryMm, 1);
       Serial.print(F("/"));
@@ -320,7 +311,7 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   // centrado longitudinal solo se aplica cuando se alcanzo la nueva casilla.
   navigator.snapYawToNearest90();
   odometryMm = readOdometryMm();
-  if (useTofWalls && odometryMm >= targetDistanceMm) navigator.alignWithFrontWall();
+  if (odometryMm >= targetDistanceMm) navigator.alignWithFrontWall();
   // Los 3000 ms reglamentarios se cumplen con motores detenidos mientras ToF,
   // OLED y la telemetria Serie continúan actualizandose.
   navigator.restWithTelemetry(NAV_CELL_REST_MS);
@@ -423,9 +414,6 @@ void Navigator::begin() {
   trackBState_ = TrackBState::SECTION1_EXPLORE;
   trackBAfterTurn_ = TrackBState::SECTION1_EXPLORE;
   trackBMove_ = FORWARD;
-  section3ReferenceHeading_ = NORTH;
-  section3ReferenceLocked_ = false;
-  colorPathActive = false;
   trackBScore_ = 0;
   qtrPeak_ = 0;
   trackBLastScanMs_ = 0;
@@ -485,8 +473,8 @@ void Navigator::begin() {
 
   if (activeMode == TRACK_MODE_A) {
     // El primer desplazamiento no depende de la regla de pared: siempre intenta
-    // recorrer la primera celda de 300 mm antes de iniciar SCAN/DECIDE normal.
-    Serial.println(F("[NAV] Primer avance obligatorio: 300 mm"));
+    // recorrer la primera celda de 280 mm antes de iniciar SCAN/DECIDE normal.
+    Serial.println(F("[NAV] Primer avance obligatorio: 280 mm"));
     currentState = ADVANCE;
     advanceOneCell();
     currentState = SCAN;
@@ -494,7 +482,7 @@ void Navigator::begin() {
   } else {
     // Pista B conserva el mismo primer avance obligatorio y el PID recto de
     // Pista A antes de activar la exploracion de su grilla 3x3.
-    Serial.println(F("[PISTA B - SEC1] Primer avance obligatorio: 300 mm"));
+    Serial.println(F("[PISTA B - SEC1] Primer avance obligatorio: 280 mm"));
     currentState = ADVANCE;
     advanceOneCell();
     currentState = SCAN;
@@ -621,11 +609,10 @@ Navigator::TurnResult Navigator::updateTurn() {
   if (turnSettling_) {
     if (millis() - settleStartedMs_ < TURN_SETTLE_MS) return TurnResult::IN_PROGRESS;
     turnSettling_ = false;
-    // Cada tramo de 90° termina con referencia ortogonal. La alineacion ToF
-    // queda deshabilitada de forma permanente una vez que Rosa activa la
-    // navegacion pura por colores.
+    // Cada tramo de 90° termina con referencia ortogonal y alineacion laser
+    // frontal cuando existe una pared medible como referencia.
     snapYawToNearest90();
-    if (!colorPathActive) alignWithFrontWall();
+    alignWithFrontWall();
 
     if (turn180Sequence_ && !turn180SecondTurn_) {
       // Tras el primer cuarto de vuelta, toma muestras ToF inmovil durante
@@ -869,27 +856,21 @@ void Navigator::refreshStationaryTelemetry() {
   // La pantalla simplificada muestra siempre una muestra fisica actual del
   // TCS34725, tambien durante los reposos obligatorios.
   updateTrackBColor();
-  if (!colorPathActive) {
-    const CellStatus status = scanCellWalls();
-    freeF = status.freeFront;
-    freeL = status.freeLeft;
-    freeR = status.freeRight;
-  }
+  const CellStatus status = scanCellWalls();
+  freeF = status.freeFront;
+  freeL = status.freeLeft;
+  freeR = status.freeRight;
   odometryMm = readOdometryMm();
   renderOled();
 
   Serial.print(F("[PAUSA] YAW:"));
   Serial.print(yawDeg, 1);
-  if (colorPathActive) {
-    Serial.println(F(" | RUTA COLOR (ToF desactivado)"));
-  } else {
-    Serial.print(F(" F:"));
-    Serial.print(scanDistF);
-    Serial.print(F(" L:"));
-    Serial.print(scanDistL);
-    Serial.print(F(" R:"));
-    Serial.println(scanDistR);
-  }
+  Serial.print(F(" F:"));
+  Serial.print(scanDistF);
+  Serial.print(F(" L:"));
+  Serial.print(scanDistL);
+  Serial.print(F(" R:"));
+  Serial.println(scanDistR);
 }
 
 void Navigator::restWithTelemetry(uint32_t durationMs) {
@@ -1029,20 +1010,7 @@ bool Navigator::isGoalColorDetected() {
       // Piso se muestra en OLED, pero es neutro para el checklist.
       break;
   }
-  activateColorPathIfPink();
   return false;
-}
-
-// Rosa es el unico disparador de esta transicion. El latch no se desactiva
-// durante la ejecucion: desde aqui la direccion procede solo del color.
-void Navigator::activateColorPathIfPink() {
-  if (colorPathActive || currentTrackColor_ != COLOR_PINK) return;
-
-  snapYawToNearest90();
-  section3ReferenceHeading_ = currentHeading;
-  section3ReferenceLocked_ = true;
-  colorPathActive = true;
-  Serial.println(F("[TRANSICION] Color ROSA detectado! Apagando Pared Derecha. Activando Navegacion Pura por Colores (Seccion 3)..."));
 }
 
 bool Navigator::allRequiredColorsFound() const {
@@ -1076,76 +1044,11 @@ Orientation Navigator::getHeading() const {
 }
 
 Move Navigator::decideRightWallRule() {
-  // Casillas neutras: derecha -> izquierda -> frente -> retorno.
-  if (freeR) return TURN_RIGHT;
-  if (freeL) return TURN_LEFT;
+  // Regla estable de celda: frente -> izquierda -> derecha -> retorno.
   if (freeF) return FORWARD;
+  if (freeL) return TURN_LEFT;
+  if (freeR) return TURN_RIGHT;
   return TURN_180;
-}
-
-// Traduce exclusivamente los colores direccionales al rumbo absoluto que se
-// tomo al pisar Rosa. No consulta ToF ni las banderas freeF/freeL/freeR.
-Move Navigator::decideColorPathMove() {
-  if (!section3ReferenceLocked_) {
-    snapYawToNearest90();
-    section3ReferenceHeading_ = currentHeading;
-    section3ReferenceLocked_ = true;
-  }
-
-  int8_t headingOffset = -1;
-  int16_t targetTrackAngle = 0;
-  switch (currentTrackColor_) {
-    case COLOR_CYAN:
-      headingOffset = 1;
-      targetTrackAngle = 90;
-      break;
-    case COLOR_YELLOW:
-      headingOffset = 3;
-      targetTrackAngle = -90;
-      break;
-    case COLOR_ORANGE:
-      headingOffset = 0;
-      targetTrackAngle = 0;
-      break;
-    case COLOR_PINK:
-      headingOffset = 2;
-      targetTrackAngle = 180;
-      break;
-    case COLOR_RED:
-      Serial.println(F("[RUTA COLOR] ROJO | Mantener rumbo y avanzar 300 mm"));
-      return FORWARD;
-    case COLOR_GREEN:
-    case COLOR_LIME:
-    case COLOR_FLOOR:
-    default:
-      Serial.print(F("[RUTA COLOR] "));
-      Serial.print(trackColorName(currentTrackColor_));
-      Serial.println(F(" | Mantener rumbo y avanzar 300 mm"));
-      return FORWARD;
-  }
-
-  snapYawToNearest90();
-  const uint8_t desiredHeading =
-      (static_cast<uint8_t>(section3ReferenceHeading_) +
-       static_cast<uint8_t>(headingOffset)) % 4U;
-  const uint8_t relative =
-      (desiredHeading + 4U - static_cast<uint8_t>(currentHeading)) % 4U;
-
-  Move move = FORWARD;
-  if (relative == 1U) move = TURN_RIGHT;
-  else if (relative == 3U) move = TURN_LEFT;
-  else if (relative == 2U) move = TURN_180;
-
-  Serial.print(F("[RUTA COLOR] "));
-  Serial.print(trackColorName(currentTrackColor_));
-  Serial.print(F(" | Objetivo absoluto: "));
-  Serial.print(targetTrackAngle);
-  Serial.print(F(" grados | Accion: "));
-  if (move == FORWARD) Serial.println(F("ADELANTE 300 mm"));
-  else if (move == TURN_RIGHT) Serial.println(F("GIRO DERECHA + AVANCE 300 mm"));
-  else if (move == TURN_LEFT) Serial.println(F("GIRO IZQUIERDA + AVANCE 300 mm"));
-  else Serial.println(F("GIRO 180 + AVANCE 300 mm"));
-  return move;
 }
 
 uint8_t Navigator::trackBSectionNumber() const {
@@ -1171,7 +1074,6 @@ void Navigator::updateTrackBColor() {
   currentTrackColor_ = readDetectedColor();
   strncpy(currentColorName, trackColorName(currentTrackColor_), sizeof(currentColorName) - 1);
   currentColorName[sizeof(currentColorName) - 1] = '\0';
-  activateColorPathIfPink();
 }
 
 bool Navigator::isTrackBWhiteLine() {
@@ -1349,12 +1251,6 @@ void Navigator::updateTrackBTurn() {
 }
 
 void Navigator::updateTrackB() {
-  // El latch Rosa transfiere el control a la FSM comun, que ya no toca ToF.
-  if (colorPathActive) {
-    currentState = SCAN;
-    return;
-  }
-
   lineSensor.update();
   qtrPeak_ = readTrackBQtrPeak();
 
@@ -1370,16 +1266,11 @@ void Navigator::updateTrackB() {
   switch (trackBState_) {
     case TrackBState::SECTION1_EXPLORE: {
       updateTrackBColor();
-      if (colorPathActive) {
-        currentState = SCAN;
-        renderOled();
-        break;
-      }
       CellStatus status = scanCellWalls();
       checkAndRecoverFrontZero();
       // checkAndRecoverFrontZero() puede haber reposicionado el chasis y
       // reemplazado las tres distancias; reconstruir TODO el estado antes de
-      // aplicar la navegacion de pared derecha preferente.
+      // aplicar la navegacion laser Frente -> Izquierda -> Derecha.
       status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
       status.freeLeft = scanDistL == 0 || scanDistL >= UMBRAL_PARED_MM;
       status.freeRight = scanDistR == 0 || scanDistR >= UMBRAL_PARED_MM;
@@ -1387,13 +1278,9 @@ void Navigator::updateTrackB() {
       freeL = status.freeLeft;
       freeR = status.freeRight;
 
-      if (currentTrackColor_ == COLOR_RED) {
-        trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
-        trackBState_ = TrackBState::SECTION2_ENTER;
-        Serial.println(F("[PISTA B] Checkpoint Rojo Seccion 1 detectado. Transicionando a Seccion 2..."));
-      } else if (trackBState_ == TrackBState::SECTION1_EXPLORE) {
+      if (trackBState_ == TrackBState::SECTION1_EXPLORE) {
         const Move move = decideRightWallRule();
-        Serial.print(F("[PISTA B - SEC1] Pared derecha: "));
+        Serial.print(F("[PISTA B - SEC1] Regla laser F->L->R: "));
         if (move == FORWARD) Serial.println(F("ADELANTE"));
         else if (move == TURN_RIGHT) Serial.println(F("GIRO DERECHA"));
         else if (move == TURN_LEFT) Serial.println(F("GIRO IZQUIERDA"));
@@ -1422,7 +1309,7 @@ void Navigator::updateTrackB() {
     case TrackBState::SECTION2_ENTER:
       // El checkpoint se cruza exactamente una celda antes de habilitar el
       // escaneo QTR continuo de la cuadricula verde 2x4.
-      Serial.println(F("[PISTA B - SEC2] Cruzando Checkpoint: avance de 300 mm a primera celda verde."));
+      Serial.println(F("[PISTA B - SEC2] Cruzando Checkpoint: avance de 280 mm a primera celda verde."));
       advanceOneCell(CELL_MM);
       trackBState_ = TrackBState::SECTION2_SCAN;
       renderOled();
@@ -1430,23 +1317,9 @@ void Navigator::updateTrackB() {
 
     case TrackBState::SECTION2_SCAN:
       updateTrackBColor();
-      if (colorPathActive) {
-        currentState = SCAN;
-        renderOled();
-        break;
-      }
-      if (currentTrackColor_ == COLOR_RED) {
-        trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
-        // El rumbo al cruzar el checkpoint define el Norte (0°) de la pista
-        // para todas las instrucciones direccionales de la Seccion 3.
-        snapYawToNearest90();
-        section3ReferenceHeading_ = currentHeading;
-        section3ReferenceLocked_ = true;
-        trackBState_ = TrackBState::SECTION3_SCAN;
-        Serial.println(F("[PISTA B - SEC2] Checkpoint Rojo alcanzado. Referencia de Seccion 3 fijada."));
-      } else {
-        trackBState_ = TrackBState::SECTION2_ADVANCE;
-      }
+      // El color se conserva para OLED, sin activar cambios de seccion ni
+      // alterar la decision de movimiento.
+      trackBState_ = TrackBState::SECTION2_ADVANCE;
       renderOled();
       break;
 
@@ -1458,80 +1331,29 @@ void Navigator::updateTrackB() {
 
     case TrackBState::SECTION3_SCAN: {
       updateTrackBColor();
-      if (colorPathActive) {
-        currentState = SCAN;
-        renderOled();
-        break;
-      }
-      // Una entrada directa a esta seccion tambien conserva una referencia
-      // valida, aun si no se produjo por el checkpoint normal de Seccion 2.
-      if (!section3ReferenceLocked_) {
-        snapYawToNearest90();
-        section3ReferenceHeading_ = currentHeading;
-        section3ReferenceLocked_ = true;
-      }
+      // Todo color es solamente telemetria visual. Las paredes ToF definen
+      // por completo la accion, igual que en las secciones anteriores.
+      CellStatus status = scanCellWalls();
+      checkAndRecoverFrontZero();
+      status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
+      status.freeLeft = scanDistL == 0 || scanDistL >= UMBRAL_PARED_MM;
+      status.freeRight = scanDistR == 0 || scanDistR >= UMBRAL_PARED_MM;
+      freeF = status.freeFront;
+      freeL = status.freeLeft;
+      freeR = status.freeRight;
+      printCellStatus(status);
 
-      int8_t trackTurnOffset = -1;
-      int16_t targetTrackAngle = 0;
-      if (currentTrackColor_ == COLOR_CYAN) {
-        trackTurnOffset = 1;
-        targetTrackAngle = 90;
-      } else if (currentTrackColor_ == COLOR_YELLOW) {
-        trackTurnOffset = 3;
-        targetTrackAngle = -90;
-      } else if (currentTrackColor_ == COLOR_ORANGE) {
-        trackTurnOffset = 0;
-        targetTrackAngle = 0;
-      } else if (currentTrackColor_ == COLOR_PINK) {
-        trackTurnOffset = 2;
-        targetTrackAngle = 180;
-      }
-
-      if (trackTurnOffset < 0) {
-        // Piso, Verde, Lima y Rojo no codifican una direccion: toman la regla
-        // de pared derecha con ToF actual y recuperacion de falso 0.
-        CellStatus status = scanCellWalls();
-        checkAndRecoverFrontZero();
-        status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
-        status.freeLeft = scanDistL == 0 || scanDistL >= UMBRAL_PARED_MM;
-        status.freeRight = scanDistR == 0 || scanDistR >= UMBRAL_PARED_MM;
-        freeF = status.freeFront;
-        freeL = status.freeLeft;
-        freeR = status.freeRight;
-        const Move move = decideRightWallRule();
-        Serial.print(F("[SECCION 3] Color neutral: "));
-        Serial.print(trackColorName(currentTrackColor_));
-        Serial.print(F(" | Pared derecha: "));
-        if (move == FORWARD) Serial.println(F("ADELANTE"));
-        else if (move == TURN_RIGHT) Serial.println(F("DERECHA"));
-        else if (move == TURN_LEFT) Serial.println(F("IZQUIERDA"));
-        else Serial.println(F("180"));
-
-        if (move == FORWARD) trackBState_ = TrackBState::SECTION3_ADVANCE;
-        else startTrackBTurn(move, TrackBState::SECTION3_ADVANCE);
-        renderOled();
-        break;
-      }
-
-      snapYawToNearest90();
-      const uint8_t desiredHeading =
-          (static_cast<uint8_t>(section3ReferenceHeading_) +
-           static_cast<uint8_t>(trackTurnOffset)) % 4U;
-      const uint8_t relative =
-          (desiredHeading + 4U - static_cast<uint8_t>(currentHeading)) % 4U;
-      Serial.print(F("[SECCION 3] Color: "));
+      const Move move = decideRightWallRule();
+      Serial.print(F("[PISTA B - SEC3] Color OLED: "));
       Serial.print(trackColorName(currentTrackColor_));
-      Serial.print(F(" | Angulo Pista Objetivo: "));
-      Serial.println(targetTrackAngle);
-      if (relative == 0) {
-        trackBState_ = TrackBState::SECTION3_ADVANCE;
-      } else if (relative == 1) {
-        startTrackBTurn(TURN_RIGHT, TrackBState::SECTION3_ADVANCE);
-      } else if (relative == 3) {
-        startTrackBTurn(TURN_LEFT, TrackBState::SECTION3_ADVANCE);
-      } else {
-        startTrackBTurn(TURN_180, TrackBState::SECTION3_ADVANCE);
-      }
+      Serial.print(F(" | Regla laser F->L->R: "));
+      if (move == FORWARD) Serial.println(F("ADELANTE"));
+      else if (move == TURN_LEFT) Serial.println(F("GIRO IZQUIERDA"));
+      else if (move == TURN_RIGHT) Serial.println(F("GIRO DERECHA"));
+      else Serial.println(F("GIRO 180"));
+
+      if (move == FORWARD) trackBState_ = TrackBState::SECTION3_ADVANCE;
+      else startTrackBTurn(move, TrackBState::SECTION3_ADVANCE);
       renderOled();
       break;
     }
@@ -1550,23 +1372,15 @@ void Navigator::updateTrackB() {
 }
 
 void Navigator::update() {
-  if (activeMode == TRACK_MODE_B && !colorPathActive) {
+  if (activeMode == TRACK_MODE_B) {
     updateTrackB();
     return;
   }
 
   switch (currentState) {
     case SCAN: {
-      // Color primero: Rojo se registra y se muestra, pero no detiene la FSM.
+      // El color solo actualiza OLED/checklist; no modifica la navegacion.
       isGoalColorDetected();
-
-      if (colorPathActive) {
-        // Rosa ya tomo el control: no hay escaneo ni clasificacion de pared.
-        odometryMm = readOdometryMm();
-        renderOled();
-        currentState = DECIDE;
-        break;
-      }
 
       CellStatus status = scanCellWalls();
       freeF = status.freeFront;
@@ -1580,7 +1394,7 @@ void Navigator::update() {
     }
 
     case DECIDE:
-      plannedMove = colorPathActive ? decideColorPathMove() : decideRightWallRule();
+      plannedMove = decideRightWallRule();
       Serial.print(F("[NAV] Movimiento: "));
       switch (plannedMove) {
         case FORWARD: Serial.println(F("ADELANTE")); break;
