@@ -279,8 +279,11 @@ struct ColorProfile5D {
 };
 
 constexpr float COLOR_FLOOR_RGB_INTENSITY = 14.0f;
-constexpr float COLOR_5D_CLEAR_WEIGHT = 3.0f;
-constexpr float COLOR_5D_INTENSITY_WEIGHT = 2.0f;
+constexpr float COLOR_5D_RED_WEIGHT = 3.0f;
+constexpr float COLOR_5D_GREEN_WEIGHT = 2.0f;
+constexpr float COLOR_5D_BLUE_WEIGHT = 1.0f;
+constexpr float COLOR_5D_CLEAR_WEIGHT = 4.0f;
+constexpr float COLOR_5D_INTENSITY_WEIGHT = 3.0f;
 constexpr ColorProfile5D COLOR_PROFILES_5D[] = {
   {COLOR_CYAN,   "CIAN",     0.2857f, 0.4286f, 0.2857f, 0.7143f, 0.5000f},
   {COLOR_YELLOW, "AMARILLO", 0.4545f, 0.3636f, 0.1818f, 0.8182f, 0.7857f},

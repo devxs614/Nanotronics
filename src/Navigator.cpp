@@ -197,6 +197,9 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   float lastYawError = 0.0f;
   uint32_t lastControlUs = micros();
   const float decelStartMm = targetDistanceMm - 50.0f;
+  // Una vez activada la ruta por color, el avance conserva exactamente el PID
+  // calibrado, pero no vuelve a consultar ni a usar las paredes ToF.
+  const bool useTofWalls = !navigator.isColorPathActive();
 
   uint16_t dF = 0, dL = 0, dR = 0;
   Serial.print(F("\n[AVANCE] 1 celda ("));
@@ -228,9 +231,11 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
     }
 
     updateYaw();
-    dF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
-    dL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
-    dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
+    if (useTofWalls) {
+      dF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+      dL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
+      dR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
+    }
     odometryMm = readOdometryMm();
 
     if (odometryMm >= targetDistanceMm) break;
@@ -244,7 +249,7 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
       navigator.triggerStuckRecovery();
       break;
     }
-    if (dF > 0 && dF <= NAV_STOP_FRONT_MM) {
+    if (useTofWalls && dF > 0 && dF <= NAV_STOP_FRONT_MM) {
       reason = F("Pared frontal");
       break;
     }
@@ -286,12 +291,16 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
       lastLogMs = now;
       Serial.print(F("[AVANCE] YAW:"));
       Serial.print(yawDeg - targetYaw, 1);
-      Serial.print(F(" F:"));
-      Serial.print(dF);
-      Serial.print(F(" L:"));
-      Serial.print(dL);
-      Serial.print(F(" R:"));
-      Serial.print(dR);
+      if (useTofWalls) {
+        Serial.print(F(" F:"));
+        Serial.print(dF);
+        Serial.print(F(" L:"));
+        Serial.print(dL);
+        Serial.print(F(" R:"));
+        Serial.print(dR);
+      } else {
+        Serial.print(F(" | RUTA COLOR"));
+      }
       Serial.print(F(" | "));
       Serial.print(odometryMm, 1);
       Serial.print(F("/"));
@@ -311,7 +320,7 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   // centrado longitudinal solo se aplica cuando se alcanzo la nueva casilla.
   navigator.snapYawToNearest90();
   odometryMm = readOdometryMm();
-  if (odometryMm >= targetDistanceMm) navigator.alignWithFrontWall();
+  if (useTofWalls && odometryMm >= targetDistanceMm) navigator.alignWithFrontWall();
   // Los 3000 ms reglamentarios se cumplen con motores detenidos mientras ToF,
   // OLED y la telemetria Serie continúan actualizandose.
   navigator.restWithTelemetry(NAV_CELL_REST_MS);
@@ -416,6 +425,7 @@ void Navigator::begin() {
   trackBMove_ = FORWARD;
   section3ReferenceHeading_ = NORTH;
   section3ReferenceLocked_ = false;
+  colorPathActive = false;
   trackBScore_ = 0;
   qtrPeak_ = 0;
   trackBLastScanMs_ = 0;
@@ -611,10 +621,11 @@ Navigator::TurnResult Navigator::updateTurn() {
   if (turnSettling_) {
     if (millis() - settleStartedMs_ < TURN_SETTLE_MS) return TurnResult::IN_PROGRESS;
     turnSettling_ = false;
-    // Cada tramo de 90° termina con referencia ortogonal y, si existe una
-    // pared medible al frente, con su ajuste longitudinal por ToF.
+    // Cada tramo de 90° termina con referencia ortogonal. La alineacion ToF
+    // queda deshabilitada de forma permanente una vez que Rosa activa la
+    // navegacion pura por colores.
     snapYawToNearest90();
-    alignWithFrontWall();
+    if (!colorPathActive) alignWithFrontWall();
 
     if (turn180Sequence_ && !turn180SecondTurn_) {
       // Tras el primer cuarto de vuelta, toma muestras ToF inmovil durante
@@ -858,21 +869,27 @@ void Navigator::refreshStationaryTelemetry() {
   // La pantalla simplificada muestra siempre una muestra fisica actual del
   // TCS34725, tambien durante los reposos obligatorios.
   updateTrackBColor();
-  const CellStatus status = scanCellWalls();
-  freeF = status.freeFront;
-  freeL = status.freeLeft;
-  freeR = status.freeRight;
+  if (!colorPathActive) {
+    const CellStatus status = scanCellWalls();
+    freeF = status.freeFront;
+    freeL = status.freeLeft;
+    freeR = status.freeRight;
+  }
   odometryMm = readOdometryMm();
   renderOled();
 
   Serial.print(F("[PAUSA] YAW:"));
   Serial.print(yawDeg, 1);
-  Serial.print(F(" F:"));
-  Serial.print(scanDistF);
-  Serial.print(F(" L:"));
-  Serial.print(scanDistL);
-  Serial.print(F(" R:"));
-  Serial.println(scanDistR);
+  if (colorPathActive) {
+    Serial.println(F(" | RUTA COLOR (ToF desactivado)"));
+  } else {
+    Serial.print(F(" F:"));
+    Serial.print(scanDistF);
+    Serial.print(F(" L:"));
+    Serial.print(scanDistL);
+    Serial.print(F(" R:"));
+    Serial.println(scanDistR);
+  }
 }
 
 void Navigator::restWithTelemetry(uint32_t durationMs) {
@@ -950,7 +967,7 @@ TrackColor Navigator::readDetectedColor() {
 
   const float sumRGB = static_cast<float>(rawR) + rawG + rawB;
   if (sumRGB < 3.0f || rawC < 2) {
-    Serial.print(F("[COLOR 5D] Leido: PISO | d_min: "));
+    Serial.print(F("[COLOR 5D] Clasificado: PISO | d_min: "));
     Serial.println(0.0f, 4);
     return COLOR_FLOOR;
   }
@@ -969,7 +986,9 @@ TrackColor Navigator::readDetectedColor() {
     const float db = nb - profile.bNorm;
     const float dc = cRatio - profile.cRatio;
     const float di = intensityNorm - profile.intensityNorm;
-    const float dist = sqrt(dr * dr + dg * dg + db * db +
+    const float dist = sqrt(COLOR_5D_RED_WEIGHT * dr * dr +
+                            COLOR_5D_GREEN_WEIGHT * dg * dg +
+                            COLOR_5D_BLUE_WEIGHT * db * db +
                             COLOR_5D_CLEAR_WEIGHT * dc * dc +
                             COLOR_5D_INTENSITY_WEIGHT * di * di);
     if (dist < minDistance) {
@@ -980,7 +999,7 @@ TrackColor Navigator::readDetectedColor() {
 
   const ColorProfile5D& winner = COLOR_PROFILES_5D[bestIndex];
   const TrackColor detected = winner.type;
-  Serial.print(F("[COLOR 5D] Leido: "));
+  Serial.print(F("[COLOR 5D] Clasificado: "));
   Serial.print(winner.name);
   Serial.print(F(" | d_min: "));
   Serial.println(minDistance, 4);
@@ -1010,7 +1029,20 @@ bool Navigator::isGoalColorDetected() {
       // Piso se muestra en OLED, pero es neutro para el checklist.
       break;
   }
+  activateColorPathIfPink();
   return false;
+}
+
+// Rosa es el unico disparador de esta transicion. El latch no se desactiva
+// durante la ejecucion: desde aqui la direccion procede solo del color.
+void Navigator::activateColorPathIfPink() {
+  if (colorPathActive || currentTrackColor_ != COLOR_PINK) return;
+
+  snapYawToNearest90();
+  section3ReferenceHeading_ = currentHeading;
+  section3ReferenceLocked_ = true;
+  colorPathActive = true;
+  Serial.println(F("[TRANSICION] Color ROSA detectado! Apagando Pared Derecha. Activando Navegacion Pura por Colores (Seccion 3)..."));
 }
 
 bool Navigator::allRequiredColorsFound() const {
@@ -1051,6 +1083,71 @@ Move Navigator::decideRightWallRule() {
   return TURN_180;
 }
 
+// Traduce exclusivamente los colores direccionales al rumbo absoluto que se
+// tomo al pisar Rosa. No consulta ToF ni las banderas freeF/freeL/freeR.
+Move Navigator::decideColorPathMove() {
+  if (!section3ReferenceLocked_) {
+    snapYawToNearest90();
+    section3ReferenceHeading_ = currentHeading;
+    section3ReferenceLocked_ = true;
+  }
+
+  int8_t headingOffset = -1;
+  int16_t targetTrackAngle = 0;
+  switch (currentTrackColor_) {
+    case COLOR_CYAN:
+      headingOffset = 1;
+      targetTrackAngle = 90;
+      break;
+    case COLOR_YELLOW:
+      headingOffset = 3;
+      targetTrackAngle = -90;
+      break;
+    case COLOR_ORANGE:
+      headingOffset = 0;
+      targetTrackAngle = 0;
+      break;
+    case COLOR_PINK:
+      headingOffset = 2;
+      targetTrackAngle = 180;
+      break;
+    case COLOR_RED:
+      Serial.println(F("[RUTA COLOR] ROJO | Mantener rumbo y avanzar 300 mm"));
+      return FORWARD;
+    case COLOR_GREEN:
+    case COLOR_LIME:
+    case COLOR_FLOOR:
+    default:
+      Serial.print(F("[RUTA COLOR] "));
+      Serial.print(trackColorName(currentTrackColor_));
+      Serial.println(F(" | Mantener rumbo y avanzar 300 mm"));
+      return FORWARD;
+  }
+
+  snapYawToNearest90();
+  const uint8_t desiredHeading =
+      (static_cast<uint8_t>(section3ReferenceHeading_) +
+       static_cast<uint8_t>(headingOffset)) % 4U;
+  const uint8_t relative =
+      (desiredHeading + 4U - static_cast<uint8_t>(currentHeading)) % 4U;
+
+  Move move = FORWARD;
+  if (relative == 1U) move = TURN_RIGHT;
+  else if (relative == 3U) move = TURN_LEFT;
+  else if (relative == 2U) move = TURN_180;
+
+  Serial.print(F("[RUTA COLOR] "));
+  Serial.print(trackColorName(currentTrackColor_));
+  Serial.print(F(" | Objetivo absoluto: "));
+  Serial.print(targetTrackAngle);
+  Serial.print(F(" grados | Accion: "));
+  if (move == FORWARD) Serial.println(F("ADELANTE 300 mm"));
+  else if (move == TURN_RIGHT) Serial.println(F("GIRO DERECHA + AVANCE 300 mm"));
+  else if (move == TURN_LEFT) Serial.println(F("GIRO IZQUIERDA + AVANCE 300 mm"));
+  else Serial.println(F("GIRO 180 + AVANCE 300 mm"));
+  return move;
+}
+
 uint8_t Navigator::trackBSectionNumber() const {
   switch (trackBState_) {
     case TrackBState::SECTION1_EXPLORE:
@@ -1074,6 +1171,7 @@ void Navigator::updateTrackBColor() {
   currentTrackColor_ = readDetectedColor();
   strncpy(currentColorName, trackColorName(currentTrackColor_), sizeof(currentColorName) - 1);
   currentColorName[sizeof(currentColorName) - 1] = '\0';
+  activateColorPathIfPink();
 }
 
 bool Navigator::isTrackBWhiteLine() {
@@ -1251,6 +1349,12 @@ void Navigator::updateTrackBTurn() {
 }
 
 void Navigator::updateTrackB() {
+  // El latch Rosa transfiere el control a la FSM comun, que ya no toca ToF.
+  if (colorPathActive) {
+    currentState = SCAN;
+    return;
+  }
+
   lineSensor.update();
   qtrPeak_ = readTrackBQtrPeak();
 
@@ -1266,6 +1370,11 @@ void Navigator::updateTrackB() {
   switch (trackBState_) {
     case TrackBState::SECTION1_EXPLORE: {
       updateTrackBColor();
+      if (colorPathActive) {
+        currentState = SCAN;
+        renderOled();
+        break;
+      }
       CellStatus status = scanCellWalls();
       checkAndRecoverFrontZero();
       // checkAndRecoverFrontZero() puede haber reposicionado el chasis y
@@ -1321,6 +1430,11 @@ void Navigator::updateTrackB() {
 
     case TrackBState::SECTION2_SCAN:
       updateTrackBColor();
+      if (colorPathActive) {
+        currentState = SCAN;
+        renderOled();
+        break;
+      }
       if (currentTrackColor_ == COLOR_RED) {
         trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
         // El rumbo al cruzar el checkpoint define el Norte (0°) de la pista
@@ -1344,6 +1458,11 @@ void Navigator::updateTrackB() {
 
     case TrackBState::SECTION3_SCAN: {
       updateTrackBColor();
+      if (colorPathActive) {
+        currentState = SCAN;
+        renderOled();
+        break;
+      }
       // Una entrada directa a esta seccion tambien conserva una referencia
       // valida, aun si no se produjo por el checkpoint normal de Seccion 2.
       if (!section3ReferenceLocked_) {
@@ -1431,7 +1550,7 @@ void Navigator::updateTrackB() {
 }
 
 void Navigator::update() {
-  if (activeMode == TRACK_MODE_B) {
+  if (activeMode == TRACK_MODE_B && !colorPathActive) {
     updateTrackB();
     return;
   }
@@ -1440,6 +1559,14 @@ void Navigator::update() {
     case SCAN: {
       // Color primero: Rojo se registra y se muestra, pero no detiene la FSM.
       isGoalColorDetected();
+
+      if (colorPathActive) {
+        // Rosa ya tomo el control: no hay escaneo ni clasificacion de pared.
+        odometryMm = readOdometryMm();
+        renderOled();
+        currentState = DECIDE;
+        break;
+      }
 
       CellStatus status = scanCellWalls();
       freeF = status.freeFront;
@@ -1453,7 +1580,7 @@ void Navigator::update() {
     }
 
     case DECIDE:
-      plannedMove = decideRightWallRule();
+      plannedMove = colorPathActive ? decideColorPathMove() : decideRightWallRule();
       Serial.print(F("[NAV] Movimiento: "));
       switch (plannedMove) {
         case FORWARD: Serial.println(F("ADELANTE")); break;

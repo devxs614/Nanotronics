@@ -66,6 +66,8 @@ class Navigator {
   // Rumbo de entrada a la Seccion 3: define el Norte absoluto de la pista.
   Orientation section3ReferenceHeading_ = NORTH;
   bool section3ReferenceLocked_ = false;
+  // Latch permanente: Rosa activa navegacion pura por colores y anula ToF.
+  bool colorPathActive = false;
   uint16_t trackBScore_ = 0;
   uint16_t qtrPeak_ = 0;
   uint32_t trackBLastScanMs_ = 0;
@@ -113,7 +115,9 @@ class Navigator {
   uint32_t turn180PauseStartedMs_;
 
   Move decideRightWallRule();
+  Move decideColorPathMove();
   TrackColor readDetectedColor();  // Canal 1: clasificador 5D RGB+Clear+intensidad 1-NN ponderado
+  void activateColorPathIfPink();
   void calibrateGyroBias();
   void turn90(bool turnLeft, float targetDegrees = 90.0f);
   void startTurn180();
@@ -137,6 +141,7 @@ class Navigator {
   void update();               // Ejecuta el ciclo activo de la FSM en loop()
   bool isRunning() const;
   bool isGoalColorDetected();  // Actualiza color/checklist; nunca detiene la navegacion
+  bool isColorPathActive() const { return colorPathActive; }
   bool allRequiredColorsFound() const;
   void renderOled();           // OLED (canal 5): solo color clasificado centrado
   Orientation getHeading() const;
