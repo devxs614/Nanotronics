@@ -37,6 +37,17 @@ inline void selectI2CChannel(uint8_t channel) {
 #define MUX_CH_RIGHT 3
 #define MUX_CH_OLED 5
 
+// Selector fijo de pista. Puede sobreescribirse desde las banderas de
+// compilacion sin cambiar la navegacion ni los parametros de la Pista A.
+enum TrackMode : uint8_t {
+  TRACK_MODE_A,
+  TRACK_MODE_B
+};
+
+#ifndef ACTIVE_TRACK_MODE
+#define ACTIVE_TRACK_MODE TRACK_MODE_B
+#endif
+
 // Odometría y Dimensiones de Celda
 constexpr float CELL_MM = 280.0f;               // 28 cm reales por casilla
 
@@ -314,6 +325,21 @@ constexpr uint8_t VL53_LEFT_ADDRESS = 0x32;
 
 #define GRIPPER_SERVO_PIN 5
 #define QTR_SENSOR_PIN_BASE A0
+
+// QTR-8A de la Pista B. Estos pines coinciden con la configuracion de
+// LineSensor y se dejan declarados aqui como mapa de hardware unico.
+constexpr uint8_t TRACK_B_QTR_SENSOR_COUNT = 8;
+constexpr uint8_t TRACK_B_QTR_PINS[TRACK_B_QTR_SENSOR_COUNT] = {
+    A0, A1, A2, A3, A4, A5, A6, A7};
+constexpr uint16_t TRACK_B_QTR_WHITE_THRESHOLD = 600;
+constexpr uint16_t TRACK_B_PASSAGE_MIN_MM = 300;
+constexpr int16_t TRACK_B_SECTION2_PWM = 80;
+constexpr int16_t TRACK_B_QTR_STRAFE_PWM = 55;
+constexpr uint32_t TRACK_B_QTR_STRAFE_MS = 300UL;
+constexpr uint8_t TRACK_B_QTR_MAX_AVOID_ATTEMPTS = 4;
+constexpr uint16_t TRACK_B_SCORE_BALL_EXIT = 15;
+constexpr uint16_t TRACK_B_SCORE_CHECKPOINT = 70;
+constexpr uint16_t TRACK_B_SCORE_FINAL_BONUS = 85;
 
 namespace robot {
   enum class ActiveTrack {

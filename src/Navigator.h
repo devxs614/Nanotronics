@@ -44,10 +44,30 @@ enum Orientation { NORTH = 0, EAST = 1, SOUTH = 2, WEST = 3 };
 class Navigator {
  private:
   enum class TurnResult : uint8_t { IN_PROGRESS, COMPLETED, FAILED };
+  enum class TrackBState : uint8_t {
+    SECTION1_EXPLORE,
+    TURNING,
+    SECTION1_ADVANCE,
+    SECTION2_SCAN,
+    SECTION2_ADVANCE,
+    SECTION3_SCAN,
+    SECTION3_ADVANCE,
+    FINISHED
+  };
 
   State currentState;
   Move plannedMove;
   Orientation currentHeading;
+  TrackMode activeMode = ACTIVE_TRACK_MODE;
+  TrackBState trackBState_ = TrackBState::SECTION1_EXPLORE;
+  TrackBState trackBAfterTurn_ = TrackBState::SECTION1_EXPLORE;
+  Move trackBMove_ = FORWARD;
+  bool hasBall_ = false;
+  bool trackBLeavingContainer_ = false;
+  bool startupModeDisplay_ = true;
+  uint16_t trackBScore_ = 0;
+  uint16_t qtrPeak_ = 0;
+  uint32_t trackBLastScanMs_ = 0;
 
   // Banderas de lectura de pared
   bool freeF, freeL, freeR;
@@ -101,6 +121,15 @@ class Navigator {
   TurnResult updateTurn();
   void beginTurnBrake();
   void refreshStationaryTelemetry();
+  void updateTrackB();
+  void startTrackBTurn(Move move, TrackBState nextState);
+  void updateTrackBTurn();
+  void captureTrackBBall();
+  bool advanceTrackBSection2();
+  bool isTrackBWhiteLine();
+  void avoidTrackBWhiteLine();
+  void updateTrackBColor();
+  uint8_t trackBSectionNumber() const;
 
  public:
   Navigator();

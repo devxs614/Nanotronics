@@ -8,6 +8,8 @@
 #include "MotorController.h"
 #include "EncoderManager.h"
 #include "ColorSensor.h"
+#include "LineSensor.h"
+#include "GripperController.h"
 
 // Hardware y utilidades compartidas definidas en main.cpp
 extern Adafruit_VL53L0X frontSensor;
@@ -16,6 +18,8 @@ extern Adafruit_VL53L0X leftSensor;
 extern MotorController motorController;
 extern EncoderManager encoderManager;
 extern ColorSensor color;
+extern LineSensor lineSensor;
+extern GripperController gripperController;
 extern bool oledOk;
 extern bool fOk;
 extern bool rOk;
@@ -326,6 +330,32 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   return completed;
 }
 
+uint16_t readTrackBQtrPeak() {
+  uint16_t peak = 0;
+  for (uint8_t i = 0; i < TRACK_B_QTR_SENSOR_COUNT; ++i) {
+    peak = max(peak, lineSensor.sensorValues[i]);
+  }
+  return peak;
+}
+
+void strafeTrackB(bool toRight) {
+  const int16_t pwm = TRACK_B_QTR_STRAFE_PWM;
+  // Cinematica mecanum: derecha=(-,+,+,-), izquierda=(+,-,-,+).
+  if (toRight) {
+    motorController.setSpeeds(-pwm, pwm, pwm, -pwm);
+  } else {
+    motorController.setSpeeds(pwm, -pwm, -pwm, pwm);
+  }
+
+  const uint32_t startedMs = millis();
+  while (millis() - startedMs < TRACK_B_QTR_STRAFE_MS) {
+    motorController.update();
+    yield();
+  }
+  motorController.stop();
+  motorController.update();
+}
+
 }  // namespace
 
 Navigator::Navigator()
@@ -386,6 +416,15 @@ void Navigator::begin() {
   forceAlternativeTurn = false;
   currentTrackColor_ = COLOR_FLOOR;
   strcpy(currentColorName, "PISO");
+  trackBState_ = TrackBState::SECTION1_EXPLORE;
+  trackBAfterTurn_ = TrackBState::SECTION1_EXPLORE;
+  trackBMove_ = FORWARD;
+  hasBall_ = false;
+  trackBLeavingContainer_ = false;
+  trackBScore_ = 0;
+  qtrPeak_ = 0;
+  trackBLastScanMs_ = 0;
+  startupModeDisplay_ = true;
 
   // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
   // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
@@ -439,14 +478,20 @@ void Navigator::begin() {
   renderOled();
   Serial.println(F("[NAV] Estabilizacion telemetria inicial: 4 s"));
   restWithTelemetry(NAV_STARTUP_STABILIZE_MS);
+  startupModeDisplay_ = false;
 
-  // El primer desplazamiento no depende de la regla de pared: siempre intenta
-  // recorrer la primera celda de 280 mm antes de iniciar SCAN/DECIDE normal.
-  Serial.println(F("[NAV] Primer avance obligatorio: 280 mm"));
-  currentState = ADVANCE;
-  advanceOneCell();
-  currentState = SCAN;
-  Serial.println(F("[NAV] Navegacion autonoma iniciada (clasificacion RGB calibrada)"));
+  if (activeMode == TRACK_MODE_A) {
+    // El primer desplazamiento no depende de la regla de pared: siempre intenta
+    // recorrer la primera celda de 280 mm antes de iniciar SCAN/DECIDE normal.
+    Serial.println(F("[NAV] Primer avance obligatorio: 280 mm"));
+    currentState = ADVANCE;
+    advanceOneCell();
+    currentState = SCAN;
+    Serial.println(F("[NAV] Pista A iniciada (clasificacion RGB calibrada)"));
+  } else {
+    currentState = SCAN;
+    Serial.println(F("[PISTA B] Inicio Seccion 1: busqueda de pelota"));
+  }
 }
 
 // Captura exactamente 100 muestras separadas por 2 ms (ventana nominal de 200 ms)
@@ -929,6 +974,43 @@ void Navigator::renderOled() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
+  // Durante los cuatro segundos de estabilizacion se confirma de forma visible
+  // el modo que quedo fijado por ACTIVE_TRACK_MODE al compilar.
+  if (startupModeDisplay_) {
+    snprintf(line, sizeof(line), "MODO: PISTA %c", activeMode == TRACK_MODE_A ? 'A' : 'B');
+    display.setCursor(0, 0);
+    display.print(line);
+    snprintf(line, sizeof(line), "F:%u L:%u R:%u", scanDistF, scanDistL, scanDistR);
+    display.setCursor(0, 16);
+    display.print(line);
+    snprintf(line, sizeof(line), "F:%c L:%c R:%c", freeF ? 'L' : 'B', freeL ? 'L' : 'B',
+             freeR ? 'L' : 'B');
+    display.setCursor(0, 32);
+    display.print(line);
+    snprintf(line, sizeof(line), "ODO: %d mm", static_cast<int>(odometryMm));
+    display.setCursor(0, 48);
+    display.print(line);
+    display.display();
+    return;
+  }
+
+  if (activeMode == TRACK_MODE_B) {
+    snprintf(line, sizeof(line), "TRACK B - SEC %u", trackBSectionNumber());
+    display.setCursor(0, 0);
+    display.print(line);
+    snprintf(line, sizeof(line), "BALL:%s QTR:%u", hasBall_ ? "YES" : "NO", qtrPeak_);
+    display.setCursor(0, 16);
+    display.print(line);
+    snprintf(line, sizeof(line), "F:%u L:%u R:%u", scanDistF, scanDistL, scanDistR);
+    display.setCursor(0, 32);
+    display.print(line);
+    snprintf(line, sizeof(line), "ODO:%d S:%u", static_cast<int>(odometryMm), trackBScore_);
+    display.setCursor(0, 48);
+    display.print(line);
+    display.display();
+    return;
+  }
+
   char yawText[8];
   dtostrf(yawDeg, 0, 1, yawText);
   snprintf(line, sizeof(line), "YAW:%s | %s", yawText, currentColorName);
@@ -1023,7 +1105,308 @@ Move Navigator::decideRightWallRule() {
   return selectedMove;
 }
 
+uint8_t Navigator::trackBSectionNumber() const {
+  switch (trackBState_) {
+    case TrackBState::SECTION1_EXPLORE:
+    case TrackBState::SECTION1_ADVANCE:
+      return 1;
+    case TrackBState::SECTION2_SCAN:
+    case TrackBState::SECTION2_ADVANCE:
+      return 2;
+    case TrackBState::TURNING:
+      return trackBAfterTurn_ == TrackBState::SECTION3_ADVANCE ? 3 :
+             trackBAfterTurn_ == TrackBState::SECTION2_ADVANCE ? 2 : 1;
+    case TrackBState::SECTION3_SCAN:
+    case TrackBState::SECTION3_ADVANCE:
+    case TrackBState::FINISHED:
+    default:
+      return 3;
+  }
+}
+
+void Navigator::updateTrackBColor() {
+  currentTrackColor_ = readDetectedColor();
+  strncpy(currentColorName, trackColorName(currentTrackColor_), sizeof(currentColorName) - 1);
+  currentColorName[sizeof(currentColorName) - 1] = '\0';
+}
+
+void Navigator::captureTrackBBall() {
+  motorController.stop();
+  gripperController.open();
+  delay(150);
+  gripperController.close();
+  delay(BALL_GRIPPER_SETTLE_MS);
+  gripperController.hold();
+  gripperController.update();
+  hasBall_ = true;
+  trackBLeavingContainer_ = true;
+  Serial.println(F("[PISTA B] Contenedor 3 paredes: pelota sujetada."));
+}
+
+bool Navigator::isTrackBWhiteLine() {
+  lineSensor.update();
+  qtrPeak_ = readTrackBQtrPeak();
+  return qtrPeak_ >= TRACK_B_QTR_WHITE_THRESHOLD || lineSensor.hasLeftLine() ||
+         lineSensor.hasCenterLine() || lineSensor.hasRightLine();
+}
+
+void Navigator::avoidTrackBWhiteLine() {
+  motorController.stop();
+  motorController.update();
+  const CellStatus status = scanCellWalls();
+  freeF = status.freeFront;
+  freeL = status.freeLeft;
+  freeR = status.freeRight;
+
+  const bool rightOpening = status.freeRight &&
+                            (scanDistR == 0 || scanDistR >= TRACK_B_PASSAGE_MIN_MM);
+  const bool leftOpening = status.freeLeft &&
+                           (scanDistL == 0 || scanDistL >= TRACK_B_PASSAGE_MIN_MM);
+  if (rightOpening || leftOpening) {
+    const bool goRight = rightOpening;
+    Serial.print(F("[PISTA B][QTR] Linea blanca: strafe "));
+    Serial.println(goRight ? F("DERECHA") : F("IZQUIERDA"));
+    strafeTrackB(goRight);
+  } else {
+    Serial.println(F("[PISTA B][QTR] Sin abertura lateral >=30 cm; inmovil."));
+  }
+}
+
+bool Navigator::advanceTrackBSection2() {
+  if (!imuFound) {
+    resetMuxChannel(MUX_CH_IMU);
+    Serial.println(F("[PISTA B][QTR] IMU no disponible; avance cancelado."));
+    return false;
+  }
+
+  motorController.stop();
+  delay(100);
+  lastImuUs = micros();
+  updateYaw();
+  targetYaw = yawDeg;
+  encoderManager.resetTicks();
+  odometryMm = 0.0f;
+  const uint32_t startedMs = millis();
+  uint8_t avoidAttempts = 0;
+  bool completed = false;
+
+  Serial.println(F("[PISTA B][SEC 2] Avance QTR protegido."));
+  while (millis() - startedMs < NAV_TIMEOUT_MS) {
+    // La lectura se hace antes de ordenar potencia: una linea blanca detiene
+    // el chasis antes de que avance una fraccion adicional de rueda.
+    if (isTrackBWhiteLine()) {
+      motorController.stop();
+      motorController.update();
+      if (++avoidAttempts > TRACK_B_QTR_MAX_AVOID_ATTEMPTS) {
+        Serial.println(F("[PISTA B][QTR] Limite de evasiones; reescaneando."));
+        break;
+      }
+      avoidTrackBWhiteLine();
+      encoderManager.resetTicks();
+      odometryMm = 0.0f;
+      lastImuUs = micros();
+      continue;
+    }
+
+    scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+    if (scanDistF > 0 && scanDistF < UMBRAL_PARED_MM) {
+      Serial.println(F("[PISTA B][SEC 2] Obstaculo frontal; reescaneando."));
+      break;
+    }
+
+    updateYaw();
+    odometryMm = readOdometryMm();
+    if (odometryMm >= CELL_MM) {
+      completed = true;
+      break;
+    }
+
+    const float yawError = wrap180(yawDeg - targetYaw);
+    const float correction = KP_STRAIGHT * yawError;
+    const int16_t leftPwm = constrain(TRACK_B_SECTION2_PWM + static_cast<int16_t>(correction), 40, 160);
+    const int16_t rightPwm = constrain(TRACK_B_SECTION2_PWM - static_cast<int16_t>(correction), 40, 160);
+    motorController.setSpeeds(leftPwm, rightPwm, leftPwm, rightPwm);
+    motorController.update();
+    yield();
+  }
+
+  if (completed) {
+    const int16_t brake[4] = {-NAV_BRAKE_PWM, -NAV_BRAKE_PWM, -NAV_BRAKE_PWM, -NAV_BRAKE_PWM};
+    reverseBrake(brake, NAV_BRAKE_MS);
+    snapYawToNearest90();
+  } else {
+    motorController.stop();
+  }
+  restWithTelemetry(NAV_CELL_REST_MS);
+  return completed;
+}
+
+void Navigator::startTrackBTurn(Move move, TrackBState nextState) {
+  trackBMove_ = move;
+  trackBAfterTurn_ = nextState;
+  if (move == TURN_RIGHT) {
+    turn90(false, 90.0f);
+  } else if (move == TURN_LEFT) {
+    turn90(true, 90.0f);
+  } else if (move == TURN_180) {
+    startTurn180();
+  } else {
+    trackBState_ = nextState;
+    return;
+  }
+  trackBState_ = TrackBState::TURNING;
+}
+
+void Navigator::updateTrackBTurn() {
+  const TurnResult result = updateTurn();
+  if (result == TurnResult::COMPLETED) {
+    if (trackBMove_ == TURN_RIGHT) {
+      currentHeading = static_cast<Orientation>((currentHeading + 1) % 4);
+    } else if (trackBMove_ == TURN_LEFT) {
+      currentHeading = static_cast<Orientation>((currentHeading + 3) % 4);
+    } else if (trackBMove_ == TURN_180) {
+      currentHeading = static_cast<Orientation>((currentHeading + 2) % 4);
+    }
+    trackBState_ = trackBAfterTurn_;
+  } else if (result == TurnResult::FAILED) {
+    resetMuxChannel(MUX_CH_IMU);
+    trackBState_ = trackBAfterTurn_ == TrackBState::SECTION3_ADVANCE
+                       ? TrackBState::SECTION3_SCAN
+                       : TrackBState::SECTION1_EXPLORE;
+    Serial.println(F("[PISTA B] Giro no disponible; reescaneando."));
+  }
+}
+
+void Navigator::updateTrackB() {
+  lineSensor.update();
+  qtrPeak_ = readTrackBQtrPeak();
+
+  const bool scanning = trackBState_ == TrackBState::SECTION1_EXPLORE ||
+                        trackBState_ == TrackBState::SECTION2_SCAN ||
+                        trackBState_ == TrackBState::SECTION3_SCAN;
+  if (scanning && millis() - trackBLastScanMs_ < NAV_REST_TELEMETRY_MS) {
+    renderOled();
+    return;
+  }
+  if (scanning) trackBLastScanMs_ = millis();
+
+  switch (trackBState_) {
+    case TrackBState::SECTION1_EXPLORE: {
+      updateTrackBColor();
+      const CellStatus status = scanCellWalls();
+      freeF = status.freeFront;
+      freeL = status.freeLeft;
+      freeR = status.freeRight;
+
+      if (hasBall_ && currentTrackColor_ == COLOR_RED) {
+        trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
+        trackBState_ = TrackBState::SECTION2_SCAN;
+        Serial.println(F("[PISTA B] Checkpoint Rojo S1: +70; entrando a Seccion 2."));
+      } else if (!status.freeFront && !status.freeLeft && !status.freeRight) {
+        captureTrackBBall();
+        startTrackBTurn(TURN_180, TrackBState::SECTION1_ADVANCE);
+      } else {
+        const Move move = decideRightWallRule();
+        if (move == FORWARD) trackBState_ = TrackBState::SECTION1_ADVANCE;
+        else startTrackBTurn(move, TrackBState::SECTION1_ADVANCE);
+      }
+      renderOled();
+      break;
+    }
+
+    case TrackBState::TURNING:
+      updateTrackBTurn();
+      renderOled();
+      break;
+
+    case TrackBState::SECTION1_ADVANCE:
+      advanceOneCell();
+      if (trackBLeavingContainer_) {
+        trackBLeavingContainer_ = false;
+        trackBScore_ += TRACK_B_SCORE_BALL_EXIT;
+        Serial.println(F("[PISTA B] Salida del contenedor: +15."));
+      }
+      trackBState_ = TrackBState::SECTION1_EXPLORE;
+      renderOled();
+      break;
+
+    case TrackBState::SECTION2_SCAN:
+      updateTrackBColor();
+      if (currentTrackColor_ == COLOR_RED) {
+        trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
+        trackBState_ = TrackBState::SECTION3_SCAN;
+        Serial.println(F("[PISTA B] Checkpoint Rojo S2: +70; entrando a Seccion 3."));
+      } else {
+        trackBState_ = TrackBState::SECTION2_ADVANCE;
+      }
+      renderOled();
+      break;
+
+    case TrackBState::SECTION2_ADVANCE:
+      advanceTrackBSection2();
+      trackBState_ = TrackBState::SECTION2_SCAN;
+      renderOled();
+      break;
+
+    case TrackBState::SECTION3_SCAN: {
+      updateTrackBColor();
+      if (currentTrackColor_ == COLOR_RED) {
+        if (hasBall_) trackBScore_ += TRACK_B_SCORE_FINAL_BONUS;
+        motorController.stop();
+        trackBState_ = TrackBState::FINISHED;
+        currentState = STOP;
+        Serial.print(F("[PISTA B] Checkpoint final. Puntuacion: "));
+        Serial.println(trackBScore_);
+        renderOled();
+        break;
+      }
+
+      int8_t desiredHeading = -1;
+      if (currentTrackColor_ == COLOR_CYAN) desiredHeading = EAST;
+      else if (currentTrackColor_ == COLOR_YELLOW) desiredHeading = WEST;
+      else if (currentTrackColor_ == COLOR_ORANGE) desiredHeading = NORTH;
+      else if (currentTrackColor_ == COLOR_PINK) desiredHeading = SOUTH;
+
+      if (desiredHeading < 0) {
+        Serial.println(F("[PISTA B][SEC 3] Baldosa sin direccion; esperando lectura nueva."));
+        renderOled();
+        break;
+      }
+
+      const uint8_t relative =
+          (static_cast<uint8_t>(desiredHeading) + 4U - static_cast<uint8_t>(currentHeading)) % 4U;
+      if (relative == 0) {
+        trackBState_ = TrackBState::SECTION3_ADVANCE;
+      } else if (relative == 1) {
+        startTrackBTurn(TURN_RIGHT, TrackBState::SECTION3_ADVANCE);
+      } else if (relative == 3) {
+        startTrackBTurn(TURN_LEFT, TrackBState::SECTION3_ADVANCE);
+      } else {
+        startTrackBTurn(TURN_180, TrackBState::SECTION3_ADVANCE);
+      }
+      renderOled();
+      break;
+    }
+
+    case TrackBState::SECTION3_ADVANCE:
+      advanceOneCell();
+      trackBState_ = TrackBState::SECTION3_SCAN;
+      renderOled();
+      break;
+
+    case TrackBState::FINISHED:
+    default:
+      motorController.stop();
+      break;
+  }
+}
+
 void Navigator::update() {
+  if (activeMode == TRACK_MODE_B) {
+    updateTrackB();
+    return;
+  }
+
   switch (currentState) {
     case SCAN: {
       // Color primero: la baldosa roja es la meta y detiene la FSM
