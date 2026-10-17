@@ -1044,10 +1044,10 @@ Orientation Navigator::getHeading() const {
 }
 
 Move Navigator::decideRightWallRule() {
-  // Pared derecha preferente para Piso, Verde, Lima y navegacion general.
+  // Casillas neutras: derecha -> izquierda -> frente -> retorno.
   if (freeR) return TURN_RIGHT;
-  if (freeF) return FORWARD;
   if (freeL) return TURN_LEFT;
+  if (freeF) return FORWARD;
   return TURN_180;
 }
 
