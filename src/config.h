@@ -99,6 +99,13 @@ constexpr int16_t NAV_STUCK_REVERSE_PWM = 80;
 constexpr uint32_t NAV_STUCK_REVERSE_TIMEOUT_MS = 1500UL;
 constexpr uint32_t NAV_STUCK_SETTLE_MS = 200UL;
 
+// Verificacion de falso 0 mm frontal: una reversa controlada separa al robot
+// de una pared que puede saturar el retorno optico del VL53L0X.
+constexpr float NAV_FRONT_ZERO_REVERSE_MM = 20.0f;
+constexpr int16_t NAV_FRONT_ZERO_REVERSE_PWM = 50;
+constexpr uint32_t NAV_FRONT_ZERO_REVERSE_TIMEOUT_MS = 1000UL;
+constexpr uint32_t NAV_FRONT_ZERO_SETTLE_MS = 50UL;
+
 
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.
 constexpr uint32_t NAV_STARTUP_STABILIZE_MS = 4000UL;

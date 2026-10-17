@@ -903,6 +903,45 @@ void Navigator::restWithTelemetry(uint32_t durationMs) {
   motorController.stop();
 }
 
+// El mapa de la pista considera 0 mm como libre, pero un robot pegado a una
+// pared puede producir ese mismo cero por perdida de retorno del VL53L0X. Esta
+// comprobacion se invoca solo desde SCAN activo de Seccion 1, nunca durante
+// las pausas obligatorias ni durante el avance PID.
+void Navigator::checkAndRecoverFrontZero() {
+  if (scanDistF != 0) return;
+
+  Serial.println(F("[TOF FRONT] Lectura 0 mm detectada. Verificando posible contacto fisico mediante micro-reversa..."));
+  motorController.stop();
+  encoderManager.resetTicks();
+  odometryMm = 0.0f;
+
+  const uint32_t startedMs = millis();
+  motorController.moveBackward(NAV_FRONT_ZERO_REVERSE_PWM);
+  while (readOdometryMm() < NAV_FRONT_ZERO_REVERSE_MM &&
+         millis() - startedMs < NAV_FRONT_ZERO_REVERSE_TIMEOUT_MS) {
+    motorController.update();
+    yield();
+  }
+  motorController.stop();
+  motorController.update();
+  delay(NAV_FRONT_ZERO_SETTLE_MS);
+
+  // Segunda conversion fisica limpia sobre el mismo canal frontal del MUX.
+  scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+  encoderManager.resetTicks();
+  odometryMm = 0.0f;
+
+  if (scanDistF > 0 && scanDistF < UMBRAL_PARED_MM) {
+    Serial.print(F("[TOF FRONT] Pared confirmada a "));
+    Serial.print(scanDistF);
+    Serial.println(F(" mm tras retroceder 2 cm. Clasificado como PARED ('B')."));
+  } else {
+    Serial.print(F("[TOF FRONT] Pasillo abierto confirmado ("));
+    Serial.print(scanDistF);
+    Serial.println(F(" mm). Clasificado como LIBRE ('L')."));
+  }
+}
+
 // Clasificacion 1-NN por menor distancia euclidiana RGB contra los ocho
 // centroides de pista. Solo una muestra sin senal se considera Piso de entrada.
 TrackColor Navigator::readDetectedColor() {
@@ -1109,9 +1148,16 @@ Move Navigator::decideRightWallRule() {
     Serial.println(F("[ANTI-LOOP] Repeticion de 4 acciones detectada."));
     sameActionCount = 0;
 
+    // En Pista B cuatro giros derechos consecutivos con frente disponible
+    // forman el patron circular mas comun; se rompe ahora mismo avanzando.
+    if (activeMode == TRACK_MODE_B && action == 2 && freeF) {
+      selectedMove = FORWARD;
+      lastAction = 1;
+      sameActionCount = 1;
+      Serial.println(F("[ANTI-LOOP] Cuatro giros derechos; frente libre forzado."));
     // Cuatro avances iguales se rompen de inmediato girando hacia la primera
     // apertura lateral disponible, con preferencia derecha de la regla base.
-    if (action == 1 && (freeR || freeL)) {
+    } else if (action == 1 && (freeR || freeL)) {
       selectedMove = freeR ? TURN_RIGHT : TURN_LEFT;
       lastAction = selectedMove == TURN_RIGHT ? 2 : 3;
       sameActionCount = 1;
@@ -1335,7 +1381,9 @@ void Navigator::updateTrackB() {
   switch (trackBState_) {
     case TrackBState::SECTION1_EXPLORE: {
       updateTrackBColor();
-      const CellStatus status = scanCellWalls();
+      CellStatus status = scanCellWalls();
+      checkAndRecoverFrontZero();
+      status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
       freeF = status.freeFront;
       freeL = status.freeLeft;
       freeR = status.freeRight;

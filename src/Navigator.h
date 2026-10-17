@@ -123,6 +123,7 @@ class Navigator {
   TurnResult updateTurn();
   void beginTurnBrake();
   void refreshStationaryTelemetry();
+  void checkAndRecoverFrontZero();
   void updateTrackB();
   void startTrackBTurn(Move move, TrackBState nextState);
   void updateTrackBTurn();
