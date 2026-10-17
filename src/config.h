@@ -266,27 +266,30 @@ enum TrackColor : uint8_t {
   COLOR_LIME
 };
 
-// Centroides RGB normalizados de la calibracion de pista. El clasificador 1-NN
-// siempre asigna el perfil con menor distancia euclidiana cuando hay senal.
-struct ColorCentroidRgb {
-  TrackColor color;
+// Perfiles 4D de la calibracion de pista. Los tres primeros ejes son RGB
+// normalizado respecto a R+G+B y el cuarto conserva la intensidad relativa
+// del canal Clear. El clasificador 1-NN siempre toma el menor d_4D.
+struct ColorProfile4D {
+  TrackColor type;
+  const char* name;
   float rNorm;
   float gNorm;
   float bNorm;
+  float cRatio;
 };
 
-constexpr ColorCentroidRgb COLOR_CENTROIDS[] = {
-  {COLOR_CYAN,   0.312f, 0.375f, 0.312f},
-  {COLOR_YELLOW, 0.458f, 0.333f, 0.208f},
-  {COLOR_ORANGE, 0.579f, 0.263f, 0.158f},
-  {COLOR_PINK,   0.636f, 0.182f, 0.182f},
-  {COLOR_RED,    0.640f, 0.200f, 0.160f},
-  {COLOR_GREEN,  0.364f, 0.364f, 0.273f},
-  {COLOR_FLOOR,  0.447f, 0.340f, 0.213f},
-  {COLOR_LIME,   0.421f, 0.368f, 0.211f}
+constexpr ColorProfile4D COLOR_PROFILES_4D[] = {
+  {COLOR_CYAN,   "CIAN",     0.3125f, 0.3750f, 0.3125f, 0.7500f},
+  {COLOR_YELLOW, "AMARILLO", 0.4583f, 0.3333f, 0.2083f, 0.8333f},
+  {COLOR_ORANGE, "NARANJA",  0.5789f, 0.2632f, 0.1579f, 0.7895f},
+  {COLOR_PINK,   "ROSA",     0.6364f, 0.1818f, 0.1818f, 0.9394f},
+  {COLOR_RED,    "ROJO",     0.6400f, 0.2000f, 0.1600f, 0.8000f},
+  {COLOR_GREEN,  "VERDE",    0.3636f, 0.3636f, 0.2727f, 0.7273f},
+  {COLOR_FLOOR,  "PISO",     0.4468f, 0.3404f, 0.2128f, 0.9362f},
+  {COLOR_LIME,   "LIMA",     0.4211f, 0.3684f, 0.2105f, 0.8421f}
 };
-constexpr uint8_t COLOR_CENTROID_COUNT =
-    sizeof(COLOR_CENTROIDS) / sizeof(COLOR_CENTROIDS[0]);
+constexpr uint8_t COLOR_PROFILE_4D_COUNT =
+    sizeof(COLOR_PROFILES_4D) / sizeof(COLOR_PROFILES_4D[0]);
 
 constexpr uint8_t MPU6050_I2C_ADDRESS = 0x68;
 constexpr uint8_t VL53_FRONT_ADDRESS = 0x30;

@@ -935,8 +935,8 @@ void Navigator::checkAndRecoverFrontZero() {
   renderOled();
 }
 
-// Clasificacion 1-NN por menor distancia euclidiana RGB contra los ocho
-// centroides de pista. Solo una muestra sin senal se considera Piso de entrada.
+// Clasificacion 1-NN 4D: RGB normalizado + proporcion Clear, contra los ocho
+// perfiles de calibracion de pista. Solo una muestra sin senal es Piso directo.
 TrackColor Navigator::readDetectedColor() {
   selectI2CChannel(MUX_CH_COLOR);
   delay(2);
@@ -946,31 +946,36 @@ TrackColor Navigator::readDetectedColor() {
   const uint16_t rawB = color.latestReading.b;
   const uint16_t rawC = color.latestReading.c;
 
-  const float sum = static_cast<float>(rawR) + rawG + rawB;
-  if (sum < 5.0f || rawC < 3) {
-    Serial.println(F("[COLOR] PISO | sin señal"));
+  const float sumRGB = static_cast<float>(rawR) + rawG + rawB;
+  if (sumRGB < 3.0f || rawC < 2) {
+    Serial.print(F("[COLOR 4D] Leido: PISO | d_min: "));
+    Serial.println(0.0f, 4);
     return COLOR_FLOOR;
   }
 
-  const float nr = rawR / sum;
-  const float ng = rawG / sum;
-  const float nb = rawB / sum;
+  const float nr = static_cast<float>(rawR) / sumRGB;
+  const float ng = static_cast<float>(rawG) / sumRGB;
+  const float nb = static_cast<float>(rawB) / sumRGB;
+  const float cRatio = static_cast<float>(rawC) / sumRGB;
   float minDistance = 999.0f;
   uint8_t bestIndex = 0;
-  for (uint8_t i = 0; i < COLOR_CENTROID_COUNT; i++) {
-    const float dr = nr - COLOR_CENTROIDS[i].rNorm;
-    const float dg = ng - COLOR_CENTROIDS[i].gNorm;
-    const float db = nb - COLOR_CENTROIDS[i].bNorm;
-    const float dist = sqrt(dr * dr + dg * dg + db * db);
+  for (uint8_t i = 0; i < COLOR_PROFILE_4D_COUNT; i++) {
+    const ColorProfile4D& profile = COLOR_PROFILES_4D[i];
+    const float dr = nr - profile.rNorm;
+    const float dg = ng - profile.gNorm;
+    const float db = nb - profile.bNorm;
+    const float dc = cRatio - profile.cRatio;
+    const float dist = sqrt(dr * dr + dg * dg + db * db + 1.5f * dc * dc);
     if (dist < minDistance) {
       minDistance = dist;
       bestIndex = i;
     }
   }
 
-  const TrackColor detected = COLOR_CENTROIDS[bestIndex].color;
-  Serial.print(F("[COLOR] "));
-  Serial.print(trackColorName(detected));
+  const ColorProfile4D& winner = COLOR_PROFILES_4D[bestIndex];
+  const TrackColor detected = winner.type;
+  Serial.print(F("[COLOR 4D] Leido: "));
+  Serial.print(winner.name);
   Serial.print(F(" | d_min: "));
   Serial.println(minDistance, 4);
   return detected;

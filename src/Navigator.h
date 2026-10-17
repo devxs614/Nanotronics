@@ -110,7 +110,7 @@ class Navigator {
   uint32_t turn180PauseStartedMs_;
 
   Move decideRightWallRule();
-  TrackColor readDetectedColor();  // Canal 1: clasificador RGB 1-NN sobre COLOR_CENTROIDS
+  TrackColor readDetectedColor();  // Canal 1: clasificador 4D RGB+Clear 1-NN
   void calibrateGyroBias();
   void turn90(bool turnLeft, float targetDegrees = 90.0f);
   void startTurn180();
