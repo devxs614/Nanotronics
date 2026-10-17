@@ -1000,11 +1000,7 @@ bool Navigator::isGoalColorDetected() {
     case COLOR_ORANGE: foundOrange = true; break;
     case COLOR_RED:
       foundRed = true;
-      if (allRequiredColorsFound()) {
-        Serial.println(F("[META] Pista completada: colores requeridos + ROJO."));
-        return true;
-      }
-      Serial.println(F("[COLOR] ROJO detectado; faltan colores. Navegacion continua."));
+      Serial.println(F("[COLOR] ROJO detectado; navegacion continua."));
       break;
     case COLOR_LIME:
       // Verde Lima es una referencia visual valida, no parte del checklist.
@@ -1285,7 +1281,6 @@ void Navigator::updateTrackB() {
       if (currentTrackColor_ == COLOR_RED) {
         trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
         trackBState_ = TrackBState::SECTION2_ENTER;
-        motorController.stop();
         Serial.println(F("[PISTA B] Checkpoint Rojo Seccion 1 detectado. Transicionando a Seccion 2..."));
       } else if (trackBState_ == TrackBState::SECTION1_EXPLORE) {
         const Move move = decideRightWallRule();
@@ -1327,8 +1322,6 @@ void Navigator::updateTrackB() {
     case TrackBState::SECTION2_SCAN:
       updateTrackBColor();
       if (currentTrackColor_ == COLOR_RED) {
-        motorController.stop();
-        motorController.update();
         trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
         // El rumbo al cruzar el checkpoint define el Norte (0°) de la pista
         // para todas las instrucciones direccionales de la Seccion 3.
@@ -1351,16 +1344,6 @@ void Navigator::updateTrackB() {
 
     case TrackBState::SECTION3_SCAN: {
       updateTrackBColor();
-      if (currentTrackColor_ == COLOR_RED) {
-        motorController.stop();
-        trackBState_ = TrackBState::FINISHED;
-        currentState = STOP;
-        Serial.print(F("[SECCION 3] META ALCANZADA. Puntuacion: "));
-        Serial.println(trackBScore_);
-        renderOled();
-        break;
-      }
-
       // Una entrada directa a esta seccion tambien conserva una referencia
       // valida, aun si no se produjo por el checkpoint normal de Seccion 2.
       if (!section3ReferenceLocked_) {
@@ -1386,8 +1369,8 @@ void Navigator::updateTrackB() {
       }
 
       if (trackTurnOffset < 0) {
-        // Piso, Verde y Lima no codifican una direccion: toman la regla de
-        // pared derecha con distancias ToF actuales y recuperacion de falso 0.
+        // Piso, Verde, Lima y Rojo no codifican una direccion: toman la regla
+        // de pared derecha con ToF actual y recuperacion de falso 0.
         CellStatus status = scanCellWalls();
         checkAndRecoverFrontZero();
         status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
@@ -1455,16 +1438,8 @@ void Navigator::update() {
 
   switch (currentState) {
     case SCAN: {
-      // Color primero: la baldosa roja es la meta y detiene la FSM
-      if (isGoalColorDetected()) {
-        motorController.stop();
-        currentState = STOP;
-        plannedMove = ACTION_STOP;
-        odometryMm = readOdometryMm();
-        renderOled();  // Fila 1 muestra "Rojo"
-        Serial.println(F("[META ROJA DETECTADA] ROBOT DETENIDO"));
-        break;
-      }
+      // Color primero: Rojo se registra y se muestra, pero no detiene la FSM.
+      isGoalColorDetected();
 
       CellStatus status = scanCellWalls();
       freeF = status.freeFront;

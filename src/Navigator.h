@@ -136,7 +136,7 @@ class Navigator {
   void start();                // Compatibilidad Serial; la FSM ya inicia automaticamente
   void update();               // Ejecuta el ciclo activo de la FSM en loop()
   bool isRunning() const;
-  bool isGoalColorDetected();  // true solo con Rojo y checklist completo
+  bool isGoalColorDetected();  // Actualiza color/checklist; nunca detiene la navegacion
   bool allRequiredColorsFound() const;
   void renderOled();           // OLED (canal 5): solo color clasificado centrado
   Orientation getHeading() const;
