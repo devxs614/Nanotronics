@@ -46,6 +46,7 @@ class Navigator {
   enum class TurnResult : uint8_t { IN_PROGRESS, COMPLETED, FAILED };
   enum class TrackBState : uint8_t {
     SECTION1_EXPLORE,
+    SECTION1_GRAB,
     TURNING,
     SECTION1_ADVANCE,
     SECTION2_SCAN,
@@ -62,7 +63,8 @@ class Navigator {
   TrackBState trackBState_ = TrackBState::SECTION1_EXPLORE;
   TrackBState trackBAfterTurn_ = TrackBState::SECTION1_EXPLORE;
   Move trackBMove_ = FORWARD;
-  bool hasBall_ = false;
+  bool hasBall = false;
+  TrackBSection sec1State = SEC1_SEARCH_BALL;
   bool trackBLeavingContainer_ = false;
   bool startupModeDisplay_ = true;
   uint16_t trackBScore_ = 0;

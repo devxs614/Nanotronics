@@ -419,12 +419,20 @@ void Navigator::begin() {
   trackBState_ = TrackBState::SECTION1_EXPLORE;
   trackBAfterTurn_ = TrackBState::SECTION1_EXPLORE;
   trackBMove_ = FORWARD;
-  hasBall_ = false;
+  hasBall = false;
+  sec1State = SEC1_SEARCH_BALL;
   trackBLeavingContainer_ = false;
   trackBScore_ = 0;
   qtrPeak_ = 0;
   trackBLastScanMs_ = 0;
-  startupModeDisplay_ = true;
+  // Tras la pantalla de inicio que ya presenta main.cpp, la estabilizacion
+  // muestra de inmediato las cuatro filas de telemetria viva solicitadas.
+  startupModeDisplay_ = false;
+  if (activeMode == TRACK_MODE_B) {
+    gripperController.setAngle(SERVO_UP_ANGLE);
+    gripperController.update();
+    Serial.println(F("[PISTA B - SEC1] Servo de retencion: ARRIBA/ABIERTO."));
+  }
 
   // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
   // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
@@ -489,8 +497,13 @@ void Navigator::begin() {
     currentState = SCAN;
     Serial.println(F("[NAV] Pista A iniciada (clasificacion RGB calibrada)"));
   } else {
+    // Pista B conserva el mismo primer avance obligatorio y el PID recto de
+    // Pista A antes de activar la exploracion de su grilla 3x3.
+    Serial.println(F("[PISTA B - SEC1] Primer avance obligatorio: 280 mm"));
+    currentState = ADVANCE;
+    advanceOneCell();
     currentState = SCAN;
-    Serial.println(F("[PISTA B] Inicio Seccion 1: busqueda de pelota"));
+    Serial.println(F("[PISTA B - SEC1] Inicio de busqueda de pelota"));
   }
 }
 
@@ -994,11 +1007,17 @@ void Navigator::renderOled() {
     return;
   }
 
-  if (activeMode == TRACK_MODE_B) {
+  const bool trackBSection1 = activeMode == TRACK_MODE_B &&
+                              (trackBState_ == TrackBState::SECTION1_EXPLORE ||
+                               trackBState_ == TrackBState::SECTION1_GRAB ||
+                               trackBState_ == TrackBState::SECTION1_ADVANCE ||
+                               (trackBState_ == TrackBState::TURNING &&
+                                trackBAfterTurn_ == TrackBState::SECTION1_ADVANCE));
+  if (activeMode == TRACK_MODE_B && !trackBSection1) {
     snprintf(line, sizeof(line), "TRACK B - SEC %u", trackBSectionNumber());
     display.setCursor(0, 0);
     display.print(line);
-    snprintf(line, sizeof(line), "BALL:%s QTR:%u", hasBall_ ? "YES" : "NO", qtrPeak_);
+    snprintf(line, sizeof(line), "BALL:%s QTR:%u", hasBall ? "YES" : "NO", qtrPeak_);
     display.setCursor(0, 16);
     display.print(line);
     snprintf(line, sizeof(line), "F:%u L:%u R:%u", scanDistF, scanDistL, scanDistR);
@@ -1108,6 +1127,7 @@ Move Navigator::decideRightWallRule() {
 uint8_t Navigator::trackBSectionNumber() const {
   switch (trackBState_) {
     case TrackBState::SECTION1_EXPLORE:
+    case TrackBState::SECTION1_GRAB:
     case TrackBState::SECTION1_ADVANCE:
       return 1;
     case TrackBState::SECTION2_SCAN:
@@ -1132,15 +1152,37 @@ void Navigator::updateTrackBColor() {
 
 void Navigator::captureTrackBBall() {
   motorController.stop();
-  gripperController.open();
-  delay(150);
-  gripperController.close();
-  delay(BALL_GRIPPER_SETTLE_MS);
-  gripperController.hold();
+  motorController.update();
+  strncpy(currentColorName, "ATRAPANDO", sizeof(currentColorName) - 1);
+  currentColorName[sizeof(currentColorName) - 1] = '\0';
+  renderOled();
+
+  // La aproximacion solo se inicia cuando hay una pared/contenedor medida por
+  // delante. Un timeout ToF (0) nunca ordena avanzar a ciegas.
+  scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+  if (scanDistF > 70) {
+    const uint32_t startedMs = millis();
+    while (scanDistF > 65 && millis() - startedMs < NAV_FRONT_ALIGN_TIMEOUT_MS) {
+      motorController.setSpeeds(NAV_FRONT_ALIGN_PWM, NAV_FRONT_ALIGN_PWM,
+                                NAV_FRONT_ALIGN_PWM, NAV_FRONT_ALIGN_PWM);
+      motorController.update();
+      scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+      yield();
+    }
+  }
+  motorController.stop();
+  motorController.update();
+
+  Serial.println(F("[PISTA B - SEC1] Servo de retencion: BAJANDO."));
+  gripperController.setAngle(SERVO_DOWN_ANGLE);
+  delay(SERVO_ACTION_DELAY_MS);
   gripperController.update();
-  hasBall_ = true;
+  hasBall = true;
   trackBLeavingContainer_ = true;
-  Serial.println(F("[PISTA B] Contenedor 3 paredes: pelota sujetada."));
+  Serial.print(F("[PISTA B - SEC1] Pelota retenida | F:"));
+  Serial.print(scanDistF);
+  Serial.print(F(" mm | YAW:"));
+  Serial.println(yawDeg, 1);
 }
 
 bool Navigator::isTrackBWhiteLine() {
@@ -1298,21 +1340,45 @@ void Navigator::updateTrackB() {
       freeL = status.freeLeft;
       freeR = status.freeRight;
 
-      if (hasBall_ && currentTrackColor_ == COLOR_RED) {
+      if (currentTrackColor_ == COLOR_RED && hasBall) {
         trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
+        sec1State = SEC2_TRANSITION;
         trackBState_ = TrackBState::SECTION2_SCAN;
-        Serial.println(F("[PISTA B] Checkpoint Rojo S1: +70; entrando a Seccion 2."));
-      } else if (!status.freeFront && !status.freeLeft && !status.freeRight) {
-        captureTrackBBall();
-        startTrackBTurn(TURN_180, TrackBState::SECTION1_ADVANCE);
-      } else {
+        motorController.stop();
+        Serial.println(F("[PISTA B - SEC1] CHECKPOINT ALCANZADO CON PELOTA! Puntuacion: 15 + 70 = 85 PTS"));
+      } else if (currentTrackColor_ == COLOR_RED) {
+        Serial.println(F("[PISTA B - SEC1] Checkpoint Rojo detectado SIN pelota. Continuando busqueda..."));
+      }
+
+      const bool isThreeWallCell = !status.freeFront && !status.freeLeft && !status.freeRight;
+      if (!hasBall && isThreeWallCell) {
+        sec1State = SEC1_GRAB_BALL;
+        trackBState_ = TrackBState::SECTION1_GRAB;
+        Serial.println(F("[PISTA B - SEC1] Celda de la Pelota Detectada! Iniciando maniobra de captura..."));
+      } else if (trackBState_ == TrackBState::SECTION1_EXPLORE) {
         const Move move = decideRightWallRule();
-        if (move == FORWARD) trackBState_ = TrackBState::SECTION1_ADVANCE;
-        else startTrackBTurn(move, TrackBState::SECTION1_ADVANCE);
+        Serial.print(F("[PISTA B - SEC1] Pared derecha: "));
+        if (move == FORWARD) Serial.println(F("ADELANTE"));
+        else if (move == TURN_RIGHT) Serial.println(F("GIRO DERECHA"));
+        else if (move == TURN_LEFT) Serial.println(F("GIRO IZQUIERDA"));
+        else Serial.println(F("GIRO 180"));
+        if (move == FORWARD) {
+          trackBState_ = TrackBState::SECTION1_ADVANCE;
+        } else {
+          startTrackBTurn(move, TrackBState::SECTION1_ADVANCE);
+        }
       }
       renderOled();
       break;
     }
+
+    case TrackBState::SECTION1_GRAB:
+      // La rutina hace retencion, salida en dos giros de 90° y continua con
+      // el avance de 280 mm fuera del contenedor.
+      captureTrackBBall();
+      startTrackBTurn(TURN_180, TrackBState::SECTION1_ADVANCE);
+      renderOled();
+      break;
 
     case TrackBState::TURNING:
       updateTrackBTurn();
@@ -1324,7 +1390,8 @@ void Navigator::updateTrackB() {
       if (trackBLeavingContainer_) {
         trackBLeavingContainer_ = false;
         trackBScore_ += TRACK_B_SCORE_BALL_EXIT;
-        Serial.println(F("[PISTA B] Salida del contenedor: +15."));
+        sec1State = SEC1_NAVIGATE_CHECKPOINT;
+        Serial.println(F("[PISTA B - SEC1] Salida del contenedor: +15. Buscando Checkpoint Rojo."));
       }
       trackBState_ = TrackBState::SECTION1_EXPLORE;
       renderOled();
@@ -1351,7 +1418,7 @@ void Navigator::updateTrackB() {
     case TrackBState::SECTION3_SCAN: {
       updateTrackBColor();
       if (currentTrackColor_ == COLOR_RED) {
-        if (hasBall_) trackBScore_ += TRACK_B_SCORE_FINAL_BONUS;
+        if (hasBall) trackBScore_ += TRACK_B_SCORE_FINAL_BONUS;
         motorController.stop();
         trackBState_ = TrackBState::FINISHED;
         currentState = STOP;
