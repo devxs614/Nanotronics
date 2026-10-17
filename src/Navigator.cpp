@@ -935,8 +935,8 @@ void Navigator::checkAndRecoverFrontZero() {
   renderOled();
 }
 
-// Clasificacion 1-NN 4D: RGB normalizado + proporcion Clear, contra los ocho
-// perfiles de calibracion de pista. Solo una muestra sin senal es Piso directo.
+// Clasificacion 1-NN 5D: RGB normalizado, proporcion Clear e intensidad RGB
+// respecto al Piso Blanco, contra los ocho perfiles de calibracion de pista.
 TrackColor Navigator::readDetectedColor() {
   selectI2CChannel(MUX_CH_COLOR);
   delay(2);
@@ -948,7 +948,7 @@ TrackColor Navigator::readDetectedColor() {
 
   const float sumRGB = static_cast<float>(rawR) + rawG + rawB;
   if (sumRGB < 3.0f || rawC < 2) {
-    Serial.print(F("[COLOR 4D] Leido: PISO | d_min: "));
+    Serial.print(F("[COLOR 5D] Leido: PISO | d_min: "));
     Serial.println(0.0f, 4);
     return COLOR_FLOOR;
   }
@@ -957,24 +957,26 @@ TrackColor Navigator::readDetectedColor() {
   const float ng = static_cast<float>(rawG) / sumRGB;
   const float nb = static_cast<float>(rawB) / sumRGB;
   const float cRatio = static_cast<float>(rawC) / sumRGB;
+  const float intensityNorm = sumRGB / COLOR_FLOOR_RGB_INTENSITY;
   float minDistance = 999.0f;
   uint8_t bestIndex = 0;
-  for (uint8_t i = 0; i < COLOR_PROFILE_4D_COUNT; i++) {
-    const ColorProfile4D& profile = COLOR_PROFILES_4D[i];
+  for (uint8_t i = 0; i < COLOR_PROFILE_5D_COUNT; i++) {
+    const ColorProfile5D& profile = COLOR_PROFILES_5D[i];
     const float dr = nr - profile.rNorm;
     const float dg = ng - profile.gNorm;
     const float db = nb - profile.bNorm;
     const float dc = cRatio - profile.cRatio;
-    const float dist = sqrt(dr * dr + dg * dg + db * db + 1.5f * dc * dc);
+    const float di = intensityNorm - profile.intensityNorm;
+    const float dist = sqrt(dr * dr + dg * dg + db * db + dc * dc + di * di);
     if (dist < minDistance) {
       minDistance = dist;
       bestIndex = i;
     }
   }
 
-  const ColorProfile4D& winner = COLOR_PROFILES_4D[bestIndex];
+  const ColorProfile5D& winner = COLOR_PROFILES_5D[bestIndex];
   const TrackColor detected = winner.type;
-  Serial.print(F("[COLOR 4D] Leido: "));
+  Serial.print(F("[COLOR 5D] Leido: "));
   Serial.print(winner.name);
   Serial.print(F(" | d_min: "));
   Serial.println(minDistance, 4);
