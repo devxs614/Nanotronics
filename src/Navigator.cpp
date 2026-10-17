@@ -258,7 +258,7 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
       break;
     }
 
-    // Rampa de PWM 100 a 50 desde los 230 mm, manteniendo el yaw lock.
+    // Rampa de PWM 100 a 50 desde los 250 mm, manteniendo el yaw lock.
     if (odometryMm >= decelStartMm) {
       currentBaseSpeed = map(static_cast<long>(odometryMm), static_cast<long>(decelStartMm),
                              static_cast<long>(targetDistanceMm), NAV_STRAIGHT_BASE_PWM, NAV_DECEL_END_PWM);
@@ -473,8 +473,8 @@ void Navigator::begin() {
 
   if (activeMode == TRACK_MODE_A) {
     // El primer desplazamiento no depende de la regla de pared: siempre intenta
-    // recorrer la primera celda de 280 mm antes de iniciar SCAN/DECIDE normal.
-    Serial.println(F("[NAV] Primer avance obligatorio: 280 mm"));
+    // recorrer la primera celda de 300 mm antes de iniciar SCAN/DECIDE normal.
+    Serial.println(F("[NAV] Primer avance obligatorio: 300 mm"));
     currentState = ADVANCE;
     advanceOneCell();
     currentState = SCAN;
@@ -482,7 +482,7 @@ void Navigator::begin() {
   } else {
     // Pista B conserva el mismo primer avance obligatorio y el PID recto de
     // Pista A antes de activar la exploracion de su grilla 3x3.
-    Serial.println(F("[PISTA B - SEC1] Primer avance obligatorio: 280 mm"));
+    Serial.println(F("[PISTA B - SEC1] Primer avance obligatorio: 300 mm"));
     currentState = ADVANCE;
     advanceOneCell();
     currentState = SCAN;
@@ -1312,7 +1312,7 @@ void Navigator::updateTrackB() {
     case TrackBState::SECTION2_ENTER:
       // El checkpoint se cruza exactamente una celda antes de habilitar el
       // escaneo QTR continuo de la cuadricula verde 2x4.
-      Serial.println(F("[PISTA B - SEC2] Cruzando Checkpoint: avance de 280 mm a primera celda verde."));
+      Serial.println(F("[PISTA B - SEC2] Cruzando Checkpoint: avance de 300 mm a primera celda verde."));
       advanceOneCell(CELL_MM);
       trackBState_ = TrackBState::SECTION2_SCAN;
       renderOled();
