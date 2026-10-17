@@ -37,24 +37,25 @@ struct ColorProfile {
   bool valid;
 };
 
-// Tabla 4D: RGB normalizado (r/(r+g+b), ...) + intensidad normC = C/50
-struct ColorRef4D {
+// Perfiles RGB normalizados obtenidos de la calibracion de la pista.
+struct ColorRefRgb {
   TrackColor color;
   const char* name;
-  float normR, normG, normB, normC;
+  float normR, normG, normB;
+  float threshold;
 };
 
-const ColorRef4D COLOR_TABLE_4D[] = {
-  {COLOR_CYAN,   "Cyan",     0.312f, 0.375f, 0.312f, 0.240f},  // C:12
-  {COLOR_GREEN,  "Verde",    0.364f, 0.364f, 0.273f, 0.160f},  // C:8
-  {COLOR_YELLOW, "Amarillo", 0.458f, 0.333f, 0.208f, 0.400f},  // C:20
-  {COLOR_PINK,   "Rosa",     0.636f, 0.182f, 0.182f, 0.620f},  // C:31
-  {COLOR_ORANGE, "Naranja",  0.579f, 0.263f, 0.158f, 0.300f},  // C:15
-  {COLOR_RED,    "Rojo",     0.640f, 0.200f, 0.160f, 0.400f},  // C:20 (META)
-  {COLOR_FLOOR,  "Piso",     0.447f, 0.340f, 0.213f, 0.880f}   // C:44
+const ColorRefRgb COLOR_TABLE_RGB[] = {
+  {COLOR_CYAN,   "CIAN",       0.312f, 0.375f, 0.312f, 0.033f},
+  {COLOR_YELLOW, "AMARILLO",   0.458f, 0.333f, 0.208f, 0.007f},
+  {COLOR_ORANGE, "NARANJA",    0.579f, 0.263f, 0.158f, 0.044f},
+  {COLOR_PINK,   "ROSA",       0.636f, 0.182f, 0.182f, 0.014f},
+  {COLOR_RED,    "ROJO",       0.640f, 0.200f, 0.160f, 0.014f},
+  {COLOR_GREEN,  "VERDE",      0.364f, 0.364f, 0.273f, 0.033f},
+  {COLOR_FLOOR,  "PISO",       0.447f, 0.340f, 0.213f, 0.007f},
+  {COLOR_LIME,   "VERDE LIMA", 0.421f, 0.368f, 0.211f, 0.019f}
 };
-constexpr uint8_t COLOR_TABLE_4D_SIZE = sizeof(COLOR_TABLE_4D) / sizeof(COLOR_TABLE_4D[0]);
-constexpr float COLOR_MAX_DISTANCE_4D = 0.25f;
+constexpr uint8_t COLOR_TABLE_RGB_SIZE = sizeof(COLOR_TABLE_RGB) / sizeof(COLOR_TABLE_RGB[0]);
 
 enum State { SCAN, DECIDE, TURN, ADVANCE, STOP };
 enum Move { FORWARD, TURN_RIGHT, TURN_LEFT, TURN_180, ACTION_STOP };
@@ -85,10 +86,10 @@ class Navigator {
   bool foundOrange = false;
   bool foundRed = false;
 
-  // Heuristico de escape de circulos de navegacion.
-  uint8_t consecutiveSameTurnCount = 0;
-  uint8_t lastTurnDirection = 0;  // 1: izquierda, 2: derecha, 0: ninguno
-  uint8_t tempLeftWallOverrideSteps = 0;
+  // Detector de repeticion de acciones: 1=frente, 2=derecha, 3=izquierda.
+  uint8_t sameActionCount = 0;
+  uint8_t lastAction = 0;
+  bool forceAlternativeTurn = false;
 
   // Estado del giro no bloqueante, integrado directamente desde el gyro Z.
   float gyroBiasZ_;

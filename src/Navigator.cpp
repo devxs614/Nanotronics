@@ -67,27 +67,15 @@ struct CellStatus {
 
 const char* trackColorName(TrackColor colorId) {
   switch (colorId) {
-    case COLOR_CYAN: return "CYAN";
+    case COLOR_CYAN: return "CIAN";
     case COLOR_GREEN: return "VERDE";
     case COLOR_YELLOW: return "AMARILLO";
     case COLOR_PINK: return "ROSA";
     case COLOR_ORANGE: return "NARANJA";
     case COLOR_RED: return "ROJO";
+    case COLOR_LIME: return "VERDE LIMA";
     case COLOR_FLOOR:
     default: return "PISO";
-  }
-}
-
-TrackColor trackColorFromEepromSlot(uint8_t slot) {
-  switch (slot) {
-    case COLOR_SLOT_CYAN: return COLOR_CYAN;
-    case COLOR_SLOT_YELLOW: return COLOR_YELLOW;
-    case COLOR_SLOT_ORANGE: return COLOR_ORANGE;
-    case COLOR_SLOT_PINK: return COLOR_PINK;
-    case COLOR_SLOT_RED: return COLOR_RED;
-    case COLOR_SLOT_GREEN: return COLOR_GREEN;
-    case COLOR_SLOT_FLOOR:
-    default: return COLOR_FLOOR;
   }
 }
 
@@ -393,9 +381,9 @@ void Navigator::begin() {
   foundPink = false;
   foundOrange = false;
   foundRed = false;
-  consecutiveSameTurnCount = 0;
-  lastTurnDirection = 0;
-  tempLeftWallOverrideSteps = 0;
+  sameActionCount = 0;
+  lastAction = 0;
+  forceAlternativeTurn = false;
   currentTrackColor_ = COLOR_FLOOR;
   strcpy(currentColorName, "PISO");
 
@@ -458,7 +446,7 @@ void Navigator::begin() {
   currentState = ADVANCE;
   advanceOneCell();
   currentState = SCAN;
-  Serial.println(F("[NAV] Navegacion autonoma iniciada (clasificacion 4D COLOR_TABLE_4D)"));
+  Serial.println(F("[NAV] Navegacion autonoma iniciada (clasificacion RGB calibrada)"));
 }
 
 // Captura exactamente 100 muestras separadas por 2 ms (ventana nominal de 200 ms)
@@ -857,9 +845,8 @@ void Navigator::restWithTelemetry(uint32_t durationMs) {
   motorController.stop();
 }
 
-// Prioriza las firmas RGB y umbrales guardados en EEPROM. Sin una firma
-// EEPROM utilizable conserva el vecino mas cercano 4D como respaldo.
-// Una muestra oscura/no clasificable se trata como Piso y no altera checklist.
+// Clasificacion por menor distancia euclidiana RGB contra los ocho perfiles
+// exactos de pista. Piso y una muestra fuera de todos los umbrales son neutros.
 TrackColor Navigator::readDetectedColor() {
   selectI2CChannel(MUX_CH_COLOR);
   delay(2);
@@ -876,52 +863,22 @@ TrackColor Navigator::readDetectedColor() {
   const float nr = rawR / sum;
   const float ng = rawG / sum;
   const float nb = rawB / sum;
-
-  if (colorCalibrationLoaded_) {
-    float bestDistance = 999.0f;
-    const ColorSignature* bestSignature = nullptr;
-    uint8_t bestSlot = COLOR_SLOT_FLOOR;
-    for (uint8_t slot = 0; slot < COLOR_SLOT_COUNT; ++slot) {
-      const ColorSignature& signature = colorCalibration_.colors[slot];
-      if (signature.valid != 1) continue;
-
-      const float dr = nr - signature.rn;
-      const float dg = ng - signature.gn;
-      const float db = nb - signature.bn;
-      const float distance = sqrt(dr * dr + dg * dg + db * db);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestSignature = &signature;
-        bestSlot = slot;
-      }
-    }
-
-    if (bestSignature != nullptr) {
-      const float threshold = bestSignature->threshold > 0.0f
-                                  ? bestSignature->threshold
-                                  : COLOR_EEPROM_FALLBACK_THRESHOLD;
-      if (bestDistance <= threshold) return trackColorFromEepromSlot(bestSlot);
-    }
-  }
-
-  const float nc = static_cast<float>(rawC) / 50.0f;
-
   float minDistance = 999.0f;
   int bestIndex = -1;
-  for (uint8_t i = 0; i < COLOR_TABLE_4D_SIZE; i++) {
-    const float dr = nr - COLOR_TABLE_4D[i].normR;
-    const float dg = ng - COLOR_TABLE_4D[i].normG;
-    const float db = nb - COLOR_TABLE_4D[i].normB;
-    const float dc = nc - COLOR_TABLE_4D[i].normC;
-    const float dist = sqrt(dr * dr + dg * dg + db * db + dc * dc);
+  for (uint8_t i = 0; i < COLOR_TABLE_RGB_SIZE; i++) {
+    const float dr = nr - COLOR_TABLE_RGB[i].normR;
+    const float dg = ng - COLOR_TABLE_RGB[i].normG;
+    const float db = nb - COLOR_TABLE_RGB[i].normB;
+    const float dist = sqrt(dr * dr + dg * dg + db * db);
     if (dist < minDistance) {
       minDistance = dist;
       bestIndex = i;
     }
   }
 
-  if (bestIndex != -1 && minDistance < COLOR_MAX_DISTANCE_4D) {
-    return COLOR_TABLE_4D[bestIndex].color;
+  if (bestIndex != -1 && minDistance <= COLOR_TABLE_RGB[bestIndex].threshold) {
+    const TrackColor detected = COLOR_TABLE_RGB[bestIndex].color;
+    return detected == COLOR_FLOOR ? COLOR_FLOOR : detected;
   }
   return COLOR_FLOOR;
 }
@@ -944,6 +901,9 @@ bool Navigator::isGoalColorDetected() {
         return true;
       }
       Serial.println(F("[COLOR] ROJO detectado; faltan colores. Navegacion continua."));
+      break;
+    case COLOR_LIME:
+      // Verde Lima es una referencia visual valida, no parte del checklist.
       break;
     case COLOR_FLOOR:
     default:
@@ -1000,51 +960,61 @@ Orientation Navigator::getHeading() const {
 }
 
 Move Navigator::decideRightWallRule() {
-  if (tempLeftWallOverrideSteps > 0) {
-    --tempLeftWallOverrideSteps;
-    Serial.print(F("[ANTI-LOOP] Ejecutando regla invertida (Pasos restantes: "));
-    Serial.print(tempLeftWallOverrideSteps);
-    Serial.println(F(")"));
-
-    // Durante el escape se descarta el historial previo: estos tres pasos se
-    // ejecutan deliberadamente con la prioridad opuesta a la pared derecha.
-    consecutiveSameTurnCount = 0;
-    lastTurnDirection = 0;
-    if (freeF) return FORWARD;
-    if (freeL) return TURN_LEFT;
-    if (freeR) return TURN_RIGHT;
-    return TURN_180;
-  }
-
+  // Regla base de pared derecha: derecha -> frente -> izquierda -> retorno.
   Move selectedMove = TURN_180;
-  if (freeF) selectedMove = FORWARD;
-  else if (freeR) selectedMove = TURN_RIGHT;
+  if (freeR) selectedMove = TURN_RIGHT;
+  else if (freeF) selectedMove = FORWARD;
   else if (freeL) selectedMove = TURN_LEFT;
 
-  if (selectedMove != TURN_LEFT && selectedMove != TURN_RIGHT) {
-    consecutiveSameTurnCount = 0;
-    lastTurnDirection = 0;
+  // Tras detectar cuatro acciones repetidas, el siguiente DECIDE prioriza un
+  // movimiento distinto del ultimo para abandonar el patron circular.
+  if (forceAlternativeTurn) {
+    forceAlternativeTurn = false;
+    if (lastAction == 2 && freeL) {
+      selectedMove = TURN_LEFT;
+    } else if (lastAction == 3 && freeR) {
+      selectedMove = TURN_RIGHT;
+    } else if (freeF) {
+      selectedMove = FORWARD;
+    } else if (freeR) {
+      selectedMove = TURN_RIGHT;
+    } else if (freeL) {
+      selectedMove = TURN_LEFT;
+    }
+    Serial.println(F("[ANTI-LOOP] Ejecutando accion alternativa."));
+  }
+
+  uint8_t action = 0;
+  if (selectedMove == FORWARD) action = 1;
+  else if (selectedMove == TURN_RIGHT) action = 2;
+  else if (selectedMove == TURN_LEFT) action = 3;
+
+  if (action == 0) {
+    sameActionCount = 0;
+    lastAction = 0;
     return selectedMove;
   }
 
-  const uint8_t selectedDirection = selectedMove == TURN_LEFT ? 1 : 2;
-  if (lastTurnDirection == selectedDirection) {
-    ++consecutiveSameTurnCount;
-  } else {
-    consecutiveSameTurnCount = 1;
-    lastTurnDirection = selectedDirection;
+  if (action == lastAction) ++sameActionCount;
+  else {
+    sameActionCount = 1;
+    lastAction = action;
   }
 
-  if (selectedMove == TURN_RIGHT &&
-      consecutiveSameTurnCount >= NAV_ANTI_LOOP_TURN_LIMIT) {
-    tempLeftWallOverrideSteps = NAV_ANTI_LOOP_OVERRIDE_STEPS;
-    consecutiveSameTurnCount = 0;
-    lastTurnDirection = 0;
-    Serial.println(F("[ANTI-LOOP] 4 giros a la derecha; activando regla invertida."));
+  if (sameActionCount >= NAV_ANTI_LOOP_ACTION_LIMIT) {
+    Serial.println(F("[ANTI-LOOP] Repeticion de 4 acciones detectada."));
+    sameActionCount = 0;
 
-    // Si existe una salida frontal, se usa de inmediato para romper el arco
-    // circular; los tres pasos siguientes conservaran el override izquierdo.
-    if (freeF) return FORWARD;
+    // Cuatro avances iguales se rompen de inmediato girando hacia la primera
+    // apertura lateral disponible, con preferencia derecha de la regla base.
+    if (action == 1 && (freeR || freeL)) {
+      selectedMove = freeR ? TURN_RIGHT : TURN_LEFT;
+      lastAction = selectedMove == TURN_RIGHT ? 2 : 3;
+      sameActionCount = 1;
+      Serial.println(F("[ANTI-LOOP] Avances repetidos; giro lateral forzado."));
+    } else {
+      forceAlternativeTurn = true;
+    }
   }
 
   return selectedMove;
