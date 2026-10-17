@@ -63,15 +63,26 @@ bool readGyroZ(int16_t& gz) {
   return false;
 }
 
-bool initImu() {
+// Reaplica la configuración que corresponde a la escala de 16.4 LSB/dps.
+// Se usa antes de cada medición para que una recuperación previa del bus no
+// deje al MPU6050 dormido o con otra escala de giroscopio.
+bool configureImuForGyro() {
+  selectI2CChannel(IMU_MUX_CHANNEL);
+  if (!writeRegister(imuAddr, REG_PWR_MGMT_1, 0x00)) return false;
+  if (!writeRegister(imuAddr, REG_GYRO_CONFIG, 0x18)) return false;
+  delay(10);
+  return true;
+}
+
+bool findAndWakeImu() {
   selectI2CChannel(IMU_MUX_CHANNEL);
   const uint8_t addresses[] = {MPU6050_I2C_ADDR, 0x69};
   for (uint8_t address : addresses) {
+    selectI2CChannel(IMU_MUX_CHANNEL);
     Wire.beginTransmission(address);
     if (Wire.endTransmission() != 0) continue;
-    if (!writeRegister(address, REG_GYRO_CONFIG, 0x18) ||
-        !writeRegister(address, REG_PWR_MGMT_1, 0x00)) continue;
     imuAddr = address;
+    if (!configureImuForGyro()) continue;
     imuFound = true;
     return true;
   }
@@ -110,8 +121,11 @@ void stopWithBrake(bool turnLeft) {
 
 void executeImuTurn(bool turnLeft, float targetDegrees) {
   if (!imuFound) { Serial.println(F("[GIRO] IMU no disponible")); return; }
-  selectI2CChannel(IMU_MUX_CHANNEL);  // Canal 0 fijo durante todo el giro.
-  delay(2);
+  if (!configureImuForGyro()) {
+    Serial.println(F("[GIRO] no se pudo configurar la IMU"));
+    return;
+  }
+
   float turnedAngle = 0.0f;
   bool slow = false;
   uint32_t lastUs = micros();
@@ -119,6 +133,9 @@ void executeImuTurn(bool turnLeft, float targetDegrees) {
   setTurnPwm(turnLeft, TURN_PWM);
 
   while (turnedAngle < targetDegrees && millis() - startedMs < TURN_TIMEOUT_MS) {
+    // Mantiene seleccionada físicamente la IMU aun si un intento anterior
+    // recuperó el MUX. No se integra nada sin una muestra fresca y válida.
+    selectI2CChannel(IMU_MUX_CHANNEL);
     int16_t gz = 0;
     if (readGyroZ(gz)) {
       const uint32_t nowUs = micros();
@@ -130,9 +147,8 @@ void executeImuTurn(bool turnLeft, float targetDegrees) {
         turnedAngle += fabs(delta);
       }
     } else {
-      // Vuelve a dejar explícitamente la IMU como único canal antes de la
-      // siguiente iteración; no se toca OLED ni otro periférico en este giro.
-      selectI2CChannel(IMU_MUX_CHANNEL);
+      // No arrastra el tiempo de un fallo I2C a la siguiente muestra válida.
+      lastUs = micros();
     }
     if (!slow && turnedAngle >= targetDegrees - SLOW_ZONE_DEG) {
       slow = true;
@@ -154,19 +170,27 @@ void executeImuTurn(bool turnLeft, float targetDegrees) {
 
 void run360Calibration() {
   if (!imuFound) { Serial.println(F("[CAL] IMU no disponible")); return; }
-  selectI2CChannel(IMU_MUX_CHANNEL);
+  if (!configureImuForGyro()) {
+    Serial.println(F("[CAL] no se pudo configurar la IMU"));
+    return;
+  }
+
   while (Serial.available()) Serial.read();
   Serial.println(F("[CAL] Giro 360 activo; presiona cualquier tecla al completar una vuelta."));
   setTurnPwm(false, TURN_PWM);
   float rawDegrees = 0.0f;
   uint32_t lastUs = micros();
   while (!Serial.available()) {
+    selectI2CChannel(IMU_MUX_CHANNEL);
     int16_t gz = 0;
     if (readGyroZ(gz)) {
       const uint32_t nowUs = micros();
       const float dt = (nowUs - lastUs) * 0.000001f;
       lastUs = nowUs;
       if (dt > 0.0f && dt < 0.25f) rawDegrees += fabs((static_cast<float>(gz) / GYRO_LSB_PER_DPS - gyroBiasZ) * dt);
+    } else {
+      // Evita integrar un dt acumulado cuando el MUX o la IMU hicieron NACK.
+      lastUs = micros();
     }
     motorController.update();
     yield();
@@ -209,7 +233,7 @@ void setup() {
   Wire.setClock(100000UL);
   Wire.setWireTimeout(3000UL, true);
   motorController.begin(); encoderManager.begin(); motorController.stop();
-  if (initImu()) calibrateBias();
+  if (findAndWakeImu()) calibrateBias();
   Serial.println(imuFound ? F("[IMU] OK") : F("[IMU] FALLO"));
   printMenu();
 }

@@ -103,6 +103,8 @@ class Navigator {
   bool isGoalColorDetected();  // true si el TCS34725 (canal 1) clasifica como Rojo
   void renderOled();           // OLED (canal 5): YAW|Color, F/L/R, paredes, ODO
   Orientation getHeading() const;
+  void snapYawToNearest90();   // Corrige la deriva acumulada entre movimientos
+  void alignWithFrontWall();   // Centrado longitudinal opcional contra pared frontal
   void restWithTelemetry(uint32_t durationMs);
 };
 

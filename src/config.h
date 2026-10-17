@@ -57,6 +57,16 @@ constexpr float KP_STRAIGHT = 4.0f;
 constexpr float KD_STRAIGHT = 0.0f;
 constexpr int16_t NAV_STRAIGHT_BASE_PWM = 100;
 
+// Reajuste ortogonal y centrado suave antes del siguiente escaneo de celda.
+constexpr uint16_t NAV_FRONT_ALIGN_MIN_MM = 30;
+constexpr uint16_t NAV_FRONT_ALIGN_MAX_MM = 160;
+constexpr uint16_t NAV_FRONT_ALIGN_TARGET_MM = 80;
+constexpr uint16_t NAV_FRONT_ALIGN_FORWARD_MIN_MM = 85;
+constexpr uint16_t NAV_FRONT_ALIGN_REVERSE_MAX_MM = 75;
+constexpr int16_t NAV_FRONT_ALIGN_PWM = 35;
+constexpr uint32_t NAV_FRONT_ALIGN_TIMEOUT_MS = 400UL;
+constexpr uint32_t NAV_FRONT_ALIGN_SETTLE_MS = 50UL;
+
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.
 constexpr uint32_t NAV_STARTUP_STABILIZE_MS = 4000UL;
 constexpr uint32_t NAV_STARTUP_SPLASH_MS = 1500UL;

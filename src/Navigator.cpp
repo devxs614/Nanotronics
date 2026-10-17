@@ -69,6 +69,7 @@ uint16_t scanDistF = 0;
 uint16_t scanDistL = 0;
 uint16_t scanDistR = 0;
 bool tofSensorsInitialized = false;
+float targetYaw = 0.0f;
 
 void resetMuxChannel(uint8_t channel) {
   selectI2CChannel(channel);
@@ -172,7 +173,7 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   delay(100);
   lastImuUs = micros();
   updateYaw();
-  const float targetYaw = yawDeg;  // Rumbo objetivo = rumbo al iniciar
+  targetYaw = yawDeg;  // Rumbo objetivo = rumbo al iniciar
   encoderManager.resetTicks();
   odometryMm = 0.0f;
   float lastYawError = 0.0f;
@@ -277,6 +278,12 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   } else {
     motorController.stop();
   }
+
+  // La correccion de rumbo ocurre antes de la pausa y del nuevo escaneo. El
+  // centrado longitudinal solo se aplica cuando se alcanzo la nueva casilla.
+  navigator.snapYawToNearest90();
+  odometryMm = readOdometryMm();
+  if (odometryMm >= targetDistanceMm) navigator.alignWithFrontWall();
   // Los 3000 ms reglamentarios se cumplen con motores detenidos mientras ToF,
   // OLED y la telemetria Serie continúan actualizandose.
   navigator.restWithTelemetry(NAV_CELL_REST_MS);
@@ -495,6 +502,9 @@ Navigator::TurnResult Navigator::updateTurn() {
   if (turnSettling_) {
     if (millis() - settleStartedMs_ < TURN_SETTLE_MS) return TurnResult::IN_PROGRESS;
     turnSettling_ = false;
+    // El micro-freno ya termino: fija la orientacion en el eje ortogonal antes
+    // de iniciar la pausa estatica de tres segundos.
+    snapYawToNearest90();
     turnResting_ = true;
     restStartedMs_ = millis();
     lastRestTelemetryMs_ = 0;
@@ -592,6 +602,48 @@ Navigator::TurnResult Navigator::updateTurn() {
     motorController.update();
   }
   return TurnResult::IN_PROGRESS;
+}
+
+void Navigator::snapYawToNearest90() {
+  const float nearest90 = roundf(yawDeg / 90.0f) * 90.0f;
+  yawDeg = nearest90;
+  targetYaw = nearest90;
+  // Impide que la siguiente integracion incluya el intervalo anterior al snap.
+  lastImuUs = micros();
+}
+
+void Navigator::alignWithFrontWall() {
+  motorController.stop();
+
+  scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+  freeF = (scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM);
+  const bool frontWall = scanDistF >= NAV_FRONT_ALIGN_MIN_MM &&
+                         scanDistF <= NAV_FRONT_ALIGN_MAX_MM;
+  if (frontWall) {
+    const bool moveForward = scanDistF > NAV_FRONT_ALIGN_FORWARD_MIN_MM;
+    const bool moveBackward = scanDistF < NAV_FRONT_ALIGN_REVERSE_MAX_MM;
+    const uint32_t startedMs = millis();
+
+    while ((moveForward || moveBackward) &&
+           millis() - startedMs < NAV_FRONT_ALIGN_TIMEOUT_MS) {
+      // Una lectura 0 significa que no hay una pared medible para usar como
+      // referencia; se abandona el ajuste sin reutilizar una muestra antigua.
+      scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+      freeF = (scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM);
+      if (scanDistF == 0) break;
+      if ((moveForward && scanDistF <= NAV_FRONT_ALIGN_TARGET_MM) ||
+          (moveBackward && scanDistF >= NAV_FRONT_ALIGN_TARGET_MM)) break;
+
+      const int16_t pwm = moveForward ? NAV_FRONT_ALIGN_PWM : -NAV_FRONT_ALIGN_PWM;
+      motorController.setSpeeds(pwm, pwm, pwm, pwm);
+      motorController.update();
+      yield();
+    }
+  }
+
+  motorController.stop();
+  motorController.update();
+  delay(NAV_FRONT_ALIGN_SETTLE_MS);
 }
 
 // Mantiene datos frescos mientras el robot espera inmovil entre casillas.
