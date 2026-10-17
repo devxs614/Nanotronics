@@ -104,7 +104,7 @@ constexpr uint32_t NAV_STUCK_SETTLE_MS = 200UL;
 constexpr float NAV_FRONT_ZERO_REVERSE_MM = 20.0f;
 constexpr int16_t NAV_FRONT_ZERO_REVERSE_PWM = 50;
 constexpr uint32_t NAV_FRONT_ZERO_REVERSE_TIMEOUT_MS = 1000UL;
-constexpr uint32_t NAV_FRONT_ZERO_SETTLE_MS = 50UL;
+constexpr uint32_t NAV_FRONT_ZERO_SETTLE_MS = 100UL;
 
 
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.

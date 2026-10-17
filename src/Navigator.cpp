@@ -910,7 +910,7 @@ void Navigator::restWithTelemetry(uint32_t durationMs) {
 void Navigator::checkAndRecoverFrontZero() {
   if (scanDistF != 0) return;
 
-  Serial.println(F("[TOF FRONT] Lectura 0 mm detectada. Verificando posible contacto fisico mediante micro-reversa..."));
+  Serial.println(F("[TOF RECOVERY] Lectura 0 mm en frontal. Ejecutando micro-reversa de 2 cm..."));
   motorController.stop();
   encoderManager.resetTicks();
   odometryMm = 0.0f;
@@ -926,20 +926,27 @@ void Navigator::checkAndRecoverFrontZero() {
   motorController.update();
   delay(NAV_FRONT_ZERO_SETTLE_MS);
 
-  // Segunda conversion fisica limpia sobre el mismo canal frontal del MUX.
+  // Tras reposicionar el chasis, las tres mediciones anteriores ya no
+  // describen la celda actual. Se toma una conversion fisica nueva por canal.
   scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
+  scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
+  scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
+  freeF = isWallFree(scanDistF);
+  freeL = isWallFree(scanDistL);
+  freeR = isWallFree(scanDistR);
   encoderManager.resetTicks();
   odometryMm = 0.0f;
 
   if (scanDistF > 0 && scanDistF < UMBRAL_PARED_MM) {
-    Serial.print(F("[TOF FRONT] Pared confirmada a "));
+    Serial.print(F("[TOF RECOVERY] Pared confirmada a "));
     Serial.print(scanDistF);
     Serial.println(F(" mm tras retroceder 2 cm. Clasificado como PARED ('B')."));
   } else {
-    Serial.print(F("[TOF FRONT] Pasillo abierto confirmado ("));
+    Serial.print(F("[TOF RECOVERY] Pasillo abierto confirmado ("));
     Serial.print(scanDistF);
     Serial.println(F(" mm). Clasificado como LIBRE ('L')."));
   }
+  renderOled();
 }
 
 // Clasificacion 1-NN por menor distancia euclidiana RGB contra los ocho
@@ -1208,7 +1215,7 @@ void Navigator::captureTrackBBall() {
   scanDistF = readDistanceSensor(frontSensor, MUX_CH_FRONT, fOk);
   if (scanDistF > 70) {
     const uint32_t startedMs = millis();
-    while (scanDistF > 65 && millis() - startedMs < NAV_FRONT_ALIGN_TIMEOUT_MS) {
+    while (scanDistF > 60 && millis() - startedMs < NAV_FRONT_ALIGN_TIMEOUT_MS) {
       motorController.setSpeeds(NAV_FRONT_ALIGN_PWM, NAV_FRONT_ALIGN_PWM,
                                 NAV_FRONT_ALIGN_PWM, NAV_FRONT_ALIGN_PWM);
       motorController.update();
@@ -1383,7 +1390,12 @@ void Navigator::updateTrackB() {
       updateTrackBColor();
       CellStatus status = scanCellWalls();
       checkAndRecoverFrontZero();
+      // checkAndRecoverFrontZero() puede haber reposicionado el chasis y
+      // reemplazado las tres distancias; reconstruir TODO el estado antes de
+      // evaluar la celda de pelota o la prioridad de pared derecha.
       status.freeFront = scanDistF == 0 || scanDistF >= UMBRAL_PARED_MM;
+      status.freeLeft = scanDistL == 0 || scanDistL >= UMBRAL_PARED_MM;
+      status.freeRight = scanDistR == 0 || scanDistR >= UMBRAL_PARED_MM;
       freeF = status.freeFront;
       freeL = status.freeLeft;
       freeR = status.freeRight;
