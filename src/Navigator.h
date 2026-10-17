@@ -49,6 +49,7 @@ class Navigator {
     SECTION1_GRAB,
     TURNING,
     SECTION1_ADVANCE,
+    SECTION2_ENTER,
     SECTION2_SCAN,
     SECTION2_ADVANCE,
     SECTION3_SCAN,
@@ -70,6 +71,9 @@ class Navigator {
   uint16_t trackBScore_ = 0;
   uint16_t qtrPeak_ = 0;
   uint32_t trackBLastScanMs_ = 0;
+  bool qtrWhiteLeft_ = false;
+  bool qtrWhiteCenter_ = false;
+  bool qtrWhiteRight_ = false;
 
   // Banderas de lectura de pared
   bool freeF, freeL, freeR;

@@ -50,7 +50,9 @@ enum TrackBSection : uint8_t {
   SEC1_SEARCH_BALL,
   SEC1_GRAB_BALL,
   SEC1_NAVIGATE_CHECKPOINT,
-  SEC2_TRANSITION
+  SEC2_TRANSITION,
+  SEC2_GREEN_GRID,
+  SEC3_COLOR_PATH
 };
 
 #ifndef ACTIVE_TRACK_MODE
@@ -353,14 +355,17 @@ static_assert(SERVO_PIN != MOTOR4_PWM_PIN, "El servo no puede compartir PWM con 
 
 // QTR-8A de la Pista B. Estos pines coinciden con la configuracion de
 // LineSensor y se dejan declarados aqui como mapa de hardware unico.
-constexpr uint8_t TRACK_B_QTR_SENSOR_COUNT = 8;
-constexpr uint8_t TRACK_B_QTR_PINS[TRACK_B_QTR_SENSOR_COUNT] = {
+// Seccion 2: QTR-8A sobre piso verde. Blanco corresponde a la linea de 2 cm.
+constexpr uint8_t QTR_NUM_SENSORS = 8;
+constexpr uint16_t QTR_WHITE_LINE_THRESHOLD = 600;
+constexpr uint8_t TRACK_B_QTR_SENSOR_COUNT = QTR_NUM_SENSORS;
+constexpr uint8_t TRACK_B_QTR_PINS[QTR_NUM_SENSORS] = {
     A0, A1, A2, A3, A4, A5, A6, A7};
-constexpr uint16_t TRACK_B_QTR_WHITE_THRESHOLD = 600;
+constexpr uint16_t TRACK_B_QTR_WHITE_THRESHOLD = QTR_WHITE_LINE_THRESHOLD;
 constexpr uint16_t TRACK_B_PASSAGE_MIN_MM = 300;
-constexpr int16_t TRACK_B_SECTION2_PWM = 80;
-constexpr int16_t TRACK_B_QTR_STRAFE_PWM = 55;
-constexpr uint32_t TRACK_B_QTR_STRAFE_MS = 300UL;
+constexpr int16_t TRACK_B_SECTION2_PWM = NAV_STRAIGHT_BASE_PWM;
+constexpr int16_t TRACK_B_QTR_STRAFE_PWM = 60;
+constexpr uint32_t TRACK_B_QTR_STRAFE_MS = 100UL;
 constexpr uint8_t TRACK_B_QTR_MAX_AVOID_ATTEMPTS = 4;
 constexpr uint16_t TRACK_B_SCORE_BALL_EXIT = 15;
 constexpr uint16_t TRACK_B_SCORE_CHECKPOINT = 70;

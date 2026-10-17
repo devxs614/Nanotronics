@@ -1053,29 +1053,6 @@ void Navigator::renderOled() {
     return;
   }
 
-  const bool trackBSection1 = activeMode == TRACK_MODE_B &&
-                              (trackBState_ == TrackBState::SECTION1_EXPLORE ||
-                               trackBState_ == TrackBState::SECTION1_GRAB ||
-                               trackBState_ == TrackBState::SECTION1_ADVANCE ||
-                               (trackBState_ == TrackBState::TURNING &&
-                                trackBAfterTurn_ == TrackBState::SECTION1_ADVANCE));
-  if (activeMode == TRACK_MODE_B && !trackBSection1) {
-    snprintf(line, sizeof(line), "TRACK B - SEC %u", trackBSectionNumber());
-    display.setCursor(0, 0);
-    display.print(line);
-    snprintf(line, sizeof(line), "BALL:%s QTR:%u", hasBall ? "YES" : "NO", qtrPeak_);
-    display.setCursor(0, 16);
-    display.print(line);
-    snprintf(line, sizeof(line), "F:%u L:%u R:%u", scanDistF, scanDistL, scanDistR);
-    display.setCursor(0, 32);
-    display.print(line);
-    snprintf(line, sizeof(line), "ODO:%d S:%u", static_cast<int>(odometryMm), trackBScore_);
-    display.setCursor(0, 48);
-    display.print(line);
-    display.display();
-    return;
-  }
-
   char yawText[8];
   dtostrf(yawDeg, 0, 1, yawText);
   snprintf(line, sizeof(line), "YAW:%s | %s", yawText, currentColorName);
@@ -1241,30 +1218,70 @@ void Navigator::captureTrackBBall() {
 bool Navigator::isTrackBWhiteLine() {
   lineSensor.update();
   qtrPeak_ = readTrackBQtrPeak();
-  return qtrPeak_ >= TRACK_B_QTR_WHITE_THRESHOLD || lineSensor.hasLeftLine() ||
-         lineSensor.hasCenterLine() || lineSensor.hasRightLine();
+
+  qtrWhiteLeft_ = false;
+  qtrWhiteCenter_ = false;
+  qtrWhiteRight_ = false;
+  for (uint8_t i = 0; i < QTR_NUM_SENSORS; ++i) {
+    if (lineSensor.sensorValues[i] <= QTR_WHITE_LINE_THRESHOLD) continue;
+    if (i <= 2) {
+      qtrWhiteLeft_ = true;
+    } else if (i <= 4) {
+      qtrWhiteCenter_ = true;
+    } else {
+      qtrWhiteRight_ = true;
+    }
+  }
+
+  // Se conservan las banderas calibradas de LineSensor como respaldo de la
+  // lectura analogica directa; ambas usan el mismo QTR sin cambiar su driver.
+  qtrWhiteLeft_ = qtrWhiteLeft_ || lineSensor.hasLeftLine();
+  qtrWhiteCenter_ = qtrWhiteCenter_ || lineSensor.hasCenterLine();
+  qtrWhiteRight_ = qtrWhiteRight_ || lineSensor.hasRightLine();
+  return qtrWhiteLeft_ || qtrWhiteCenter_ || qtrWhiteRight_;
 }
 
 void Navigator::avoidTrackBWhiteLine() {
   motorController.stop();
   motorController.update();
+  Serial.println(F("[SECCION 2 - QTR] Linea blanca detectada! Realizando re-alineacion lateral hacia hueco de 30 cm..."));
+
   const CellStatus status = scanCellWalls();
   freeF = status.freeFront;
   freeL = status.freeLeft;
   freeR = status.freeRight;
 
-  const bool rightOpening = status.freeRight &&
-                            (scanDistR == 0 || scanDistR >= TRACK_B_PASSAGE_MIN_MM);
-  const bool leftOpening = status.freeLeft &&
-                           (scanDistL == 0 || scanDistL >= TRACK_B_PASSAGE_MIN_MM);
-  if (rightOpening || leftOpening) {
-    const bool goRight = rightOpening;
-    Serial.print(F("[PISTA B][QTR] Linea blanca: strafe "));
-    Serial.println(goRight ? F("DERECHA") : F("IZQUIERDA"));
-    strafeTrackB(goRight);
+  // Si el borde blanco aparece a la izquierda, se despeja a la derecha; la
+  // relacion se invierte para un borde derecho. En deteccion central/doble,
+  // ToF selecciona la abertura lateral de al menos 30 cm antes de corregir.
+  bool goRight = false;
+  bool canStrafe = false;
+  if (qtrWhiteLeft_ && !qtrWhiteRight_) {
+    goRight = true;
+    canStrafe = true;
+  } else if (qtrWhiteRight_ && !qtrWhiteLeft_) {
+    goRight = false;
+    canStrafe = true;
   } else {
-    Serial.println(F("[PISTA B][QTR] Sin abertura lateral >=30 cm; inmovil."));
+    const bool rightOpening = status.freeRight &&
+                              (scanDistR == 0 || scanDistR >= TRACK_B_PASSAGE_MIN_MM);
+    const bool leftOpening = status.freeLeft &&
+                             (scanDistL == 0 || scanDistL >= TRACK_B_PASSAGE_MIN_MM);
+    if (rightOpening || leftOpening) {
+      goRight = rightOpening;
+      canStrafe = true;
+    }
   }
+
+  if (!canStrafe) {
+    Serial.println(F("[SECCION 2 - QTR] Sin hueco lateral seguro; reescaneando."));
+    return;
+  }
+
+  Serial.print(F("[SECCION 2 - QTR] Strafe "));
+  Serial.print(goRight ? F("DERECHA") : F("IZQUIERDA"));
+  Serial.println(F(" | PWM 60 | 100 ms"));
+  strafeTrackB(goRight);
 }
 
 bool Navigator::advanceTrackBSection2() {
@@ -1403,9 +1420,9 @@ void Navigator::updateTrackB() {
       if (currentTrackColor_ == COLOR_RED && hasBall) {
         trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
         sec1State = SEC2_TRANSITION;
-        trackBState_ = TrackBState::SECTION2_SCAN;
+        trackBState_ = TrackBState::SECTION2_ENTER;
         motorController.stop();
-        Serial.println(F("[PISTA B - SEC1] CHECKPOINT ALCANZADO CON PELOTA! Puntuacion: 15 + 70 = 85 PTS"));
+        Serial.println(F("[PISTA B] !Checkpoint Rojo Seccion 1 detectado! Otorgando +70 pts (Total: 85 pts). Transicionando a Seccion 2 (Cuadricula Verde 2x4)..."));
       } else if (currentTrackColor_ == COLOR_RED) {
         Serial.println(F("[PISTA B - SEC1] Checkpoint Rojo detectado SIN pelota. Continuando busqueda..."));
       }
@@ -1457,12 +1474,32 @@ void Navigator::updateTrackB() {
       renderOled();
       break;
 
+    case TrackBState::SECTION2_ENTER:
+      // El checkpoint se cruza exactamente una celda antes de habilitar el
+      // escaneo QTR continuo de la cuadricula verde 2x4.
+      sec1State = SEC2_GREEN_GRID;
+      strncpy(currentColorName, "SEC2 VERDE", sizeof(currentColorName) - 1);
+      currentColorName[sizeof(currentColorName) - 1] = '\0';
+      Serial.println(F("[PISTA B - SEC2] Cruzando Checkpoint: avance de 280 mm a primera celda verde."));
+      advanceOneCell(CELL_MM);
+      trackBState_ = TrackBState::SECTION2_SCAN;
+      renderOled();
+      break;
+
     case TrackBState::SECTION2_SCAN:
       updateTrackBColor();
-      if (currentTrackColor_ == COLOR_RED) {
+      if (currentTrackColor_ == COLOR_RED && hasBall) {
+        motorController.stop();
+        motorController.update();
         trackBScore_ += TRACK_B_SCORE_CHECKPOINT;
+        sec1State = SEC3_COLOR_PATH;
         trackBState_ = TrackBState::SECTION3_SCAN;
-        Serial.println(F("[PISTA B] Checkpoint Rojo S2: +70; entrando a Seccion 3."));
+        strncpy(currentColorName, "SEC2 OK 155", sizeof(currentColorName) - 1);
+        currentColorName[sizeof(currentColorName) - 1] = '\0';
+        Serial.println(F("[PISTA B - SEC2] !CHECKPOINT SECCION 2 ALCANZADO CON PELOTA! (+70 PTS SECCION 2 | TOTAL ACUMULADO: 155 PTS)"));
+      } else if (currentTrackColor_ == COLOR_RED) {
+        Serial.println(F("[PISTA B - SEC2] Checkpoint Rojo sin pelota; continuando cuadricula verde."));
+        trackBState_ = TrackBState::SECTION2_ADVANCE;
       } else {
         trackBState_ = TrackBState::SECTION2_ADVANCE;
       }
