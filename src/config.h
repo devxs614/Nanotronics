@@ -80,6 +80,9 @@ constexpr int16_t NAV_STUCK_REVERSE_PWM = 80;
 constexpr uint32_t NAV_STUCK_REVERSE_TIMEOUT_MS = 1500UL;
 constexpr uint32_t NAV_STUCK_SETTLE_MS = 200UL;
 
+// Umbral seguro si una firma EEPROM valida aun no tiene umbral propio.
+constexpr float COLOR_EEPROM_FALLBACK_THRESHOLD = 0.25f;
+
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.
 constexpr uint32_t NAV_STARTUP_STABILIZE_MS = 4000UL;
 constexpr uint32_t NAV_STARTUP_SPLASH_MS = 1500UL;

@@ -15,7 +15,13 @@ struct ColorSignature {
 };
 
 constexpr uint8_t COLOR_SLOT_COUNT = 7;
+constexpr uint8_t COLOR_SLOT_CYAN = 0;
+constexpr uint8_t COLOR_SLOT_YELLOW = 1;
+constexpr uint8_t COLOR_SLOT_ORANGE = 2;
+constexpr uint8_t COLOR_SLOT_PINK = 3;
 constexpr uint8_t COLOR_SLOT_RED = 4;
+constexpr uint8_t COLOR_SLOT_GREEN = 5;
+constexpr uint8_t COLOR_SLOT_FLOOR = 6;
 constexpr uint32_t COLOR_CALIB_MAGIC = 0x434C5233UL;  // "CLR3"
 
 struct ColorCalibrationEeprom {
@@ -66,6 +72,8 @@ class Navigator {
   bool freeF, freeL, freeR;
 
   ColorProfile redProfile;  // Color de meta cargado de la EEPROM
+  ColorCalibrationEeprom colorCalibration_;
+  bool colorCalibrationLoaded_;
   char currentColorName[12];  // Ultimo color clasificado (Rojo, Cian, ..., Desc)
   TrackColor currentTrackColor_;
 

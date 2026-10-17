@@ -67,27 +67,27 @@ struct CellStatus {
 
 const char* trackColorName(TrackColor colorId) {
   switch (colorId) {
-    case COLOR_CYAN: return "Cyan";
-    case COLOR_GREEN: return "Verde";
-    case COLOR_YELLOW: return "Amarillo";
-    case COLOR_PINK: return "Rosa";
-    case COLOR_ORANGE: return "Naranja";
-    case COLOR_RED: return "Rojo";
+    case COLOR_CYAN: return "CYAN";
+    case COLOR_GREEN: return "VERDE";
+    case COLOR_YELLOW: return "AMARILLO";
+    case COLOR_PINK: return "ROSA";
+    case COLOR_ORANGE: return "NARANJA";
+    case COLOR_RED: return "ROJO";
     case COLOR_FLOOR:
-    default: return "Piso";
+    default: return "PISO";
   }
 }
 
-const char* trackColorShortName(TrackColor colorId) {
-  switch (colorId) {
-    case COLOR_CYAN: return "CYN";
-    case COLOR_GREEN: return "VRD";
-    case COLOR_YELLOW: return "AMA";
-    case COLOR_PINK: return "ROS";
-    case COLOR_ORANGE: return "NAR";
-    case COLOR_RED: return "ROJ";
-    case COLOR_FLOOR:
-    default: return "PIS";
+TrackColor trackColorFromEepromSlot(uint8_t slot) {
+  switch (slot) {
+    case COLOR_SLOT_CYAN: return COLOR_CYAN;
+    case COLOR_SLOT_YELLOW: return COLOR_YELLOW;
+    case COLOR_SLOT_ORANGE: return COLOR_ORANGE;
+    case COLOR_SLOT_PINK: return COLOR_PINK;
+    case COLOR_SLOT_RED: return COLOR_RED;
+    case COLOR_SLOT_GREEN: return COLOR_GREEN;
+    case COLOR_SLOT_FLOOR:
+    default: return COLOR_FLOOR;
   }
 }
 
@@ -347,6 +347,7 @@ Navigator::Navigator()
       freeF(true),
       freeL(true),
       freeR(true),
+      colorCalibrationLoaded_(false),
       currentTrackColor_(COLOR_FLOOR),
       gyroBiasZ_(0.0f),
       turnedAngle_(0.0f),
@@ -369,7 +370,8 @@ Navigator::Navigator()
       turn180FinalRest_(false),
       turn180PauseStartedMs_(0) {
   memset(&redProfile, 0, sizeof(redProfile));
-  strcpy(currentColorName, "Piso");
+  memset(&colorCalibration_, 0, sizeof(colorCalibration_));
+  strcpy(currentColorName, "PISO");
 }
 
 void Navigator::begin() {
@@ -395,7 +397,7 @@ void Navigator::begin() {
   lastTurnDirection = 0;
   tempLeftWallOverrideSteps = 0;
   currentTrackColor_ = COLOR_FLOOR;
-  strcpy(currentColorName, "Piso");
+  strcpy(currentColorName, "PISO");
 
   // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
   // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
@@ -411,12 +413,13 @@ void Navigator::begin() {
     scanDistL = readDistanceSensor(leftSensor, MUX_CH_LEFT, lOk);
     scanDistR = readDistanceSensor(rightSensor, MUX_CH_RIGHT, rOk);
   }
-  // La EEPROM guarda magic + firmas; el rojo es la firma COLOR_SLOT_RED
-  ColorCalibrationEeprom stored;
-  EEPROM.get(0, stored);
+  // Carga el bloque completo producido por el test de calibracion RGB. Las
+  // firmas y sus umbrales son la fuente primaria de clasificacion si existen.
+  EEPROM.get(0, colorCalibration_);
+  colorCalibrationLoaded_ = colorCalibration_.magic == COLOR_CALIB_MAGIC;
   memset(&redProfile, 0, sizeof(redProfile));
-  if (stored.magic == COLOR_CALIB_MAGIC && stored.colors[COLOR_SLOT_RED].valid == 1) {
-    const ColorSignature& red = stored.colors[COLOR_SLOT_RED];
+  if (colorCalibrationLoaded_ && colorCalibration_.colors[COLOR_SLOT_RED].valid == 1) {
+    const ColorSignature& red = colorCalibration_.colors[COLOR_SLOT_RED];
     redProfile.r = red.r;
     redProfile.g = red.g;
     redProfile.b = red.b;
@@ -854,7 +857,8 @@ void Navigator::restWithTelemetry(uint32_t durationMs) {
   motorController.stop();
 }
 
-// Vecino mas cercano 4D de los seis colores de pista y el piso neutro.
+// Prioriza las firmas RGB y umbrales guardados en EEPROM. Sin una firma
+// EEPROM utilizable conserva el vecino mas cercano 4D como respaldo.
 // Una muestra oscura/no clasificable se trata como Piso y no altera checklist.
 TrackColor Navigator::readDetectedColor() {
   selectI2CChannel(MUX_CH_COLOR);
@@ -872,6 +876,34 @@ TrackColor Navigator::readDetectedColor() {
   const float nr = rawR / sum;
   const float ng = rawG / sum;
   const float nb = rawB / sum;
+
+  if (colorCalibrationLoaded_) {
+    float bestDistance = 999.0f;
+    const ColorSignature* bestSignature = nullptr;
+    uint8_t bestSlot = COLOR_SLOT_FLOOR;
+    for (uint8_t slot = 0; slot < COLOR_SLOT_COUNT; ++slot) {
+      const ColorSignature& signature = colorCalibration_.colors[slot];
+      if (signature.valid != 1) continue;
+
+      const float dr = nr - signature.rn;
+      const float dg = ng - signature.gn;
+      const float db = nb - signature.bn;
+      const float distance = sqrt(dr * dr + dg * dg + db * db);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestSignature = &signature;
+        bestSlot = slot;
+      }
+    }
+
+    if (bestSignature != nullptr) {
+      const float threshold = bestSignature->threshold > 0.0f
+                                  ? bestSignature->threshold
+                                  : COLOR_EEPROM_FALLBACK_THRESHOLD;
+      if (bestDistance <= threshold) return trackColorFromEepromSlot(bestSlot);
+    }
+  }
+
   const float nc = static_cast<float>(rawC) / 50.0f;
 
   float minDistance = 999.0f;
@@ -934,12 +966,9 @@ void Navigator::renderOled() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  // CVARN muestra el checklist: mayuscula=encontrado, minuscula=pendiente.
-  char checklist[6] = {
-      foundCyan ? 'C' : 'c', foundGreen ? 'V' : 'v', foundYellow ? 'A' : 'a',
-      foundPink ? 'R' : 'r', foundOrange ? 'N' : 'n', '\0'};
-  snprintf(line, sizeof(line), "YAW:%d | %s %s", static_cast<int>(yawDeg),
-           trackColorShortName(currentTrackColor_), checklist);
+  char yawText[8];
+  dtostrf(yawDeg, 0, 1, yawText);
+  snprintf(line, sizeof(line), "YAW:%s | %s", yawText, currentColorName);
   display.setCursor(0, 0);
   display.print(line);
 
@@ -981,15 +1010,15 @@ Move Navigator::decideRightWallRule() {
     // ejecutan deliberadamente con la prioridad opuesta a la pared derecha.
     consecutiveSameTurnCount = 0;
     lastTurnDirection = 0;
-    if (freeL) return TURN_LEFT;
     if (freeF) return FORWARD;
+    if (freeL) return TURN_LEFT;
     if (freeR) return TURN_RIGHT;
     return TURN_180;
   }
 
   Move selectedMove = TURN_180;
-  if (freeR) selectedMove = TURN_RIGHT;
-  else if (freeF) selectedMove = FORWARD;
+  if (freeF) selectedMove = FORWARD;
+  else if (freeR) selectedMove = TURN_RIGHT;
   else if (freeL) selectedMove = TURN_LEFT;
 
   if (selectedMove != TURN_LEFT && selectedMove != TURN_RIGHT) {
