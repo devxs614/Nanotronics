@@ -84,6 +84,11 @@ class Navigator {
   bool turnBraking_;
   bool turnSettling_;
   bool turnResting_;
+  bool turn180Sequence_;
+  bool turn180SecondTurn_;
+  bool turn180InterRest_;
+  bool turn180FinalRest_;
+  uint32_t turn180PauseStartedMs_;
 
   Move decideRightWallRule();
   String readDetectedColor(bool& outIsGoal);  // Canal 1: vecino mas cercano sobre COLOR_TABLE

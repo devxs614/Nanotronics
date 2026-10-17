@@ -66,6 +66,8 @@ constexpr uint16_t NAV_FRONT_ALIGN_REVERSE_MAX_MM = 75;
 constexpr int16_t NAV_FRONT_ALIGN_PWM = 35;
 constexpr uint32_t NAV_FRONT_ALIGN_TIMEOUT_MS = 400UL;
 constexpr uint32_t NAV_FRONT_ALIGN_SETTLE_MS = 50UL;
+constexpr uint32_t NAV_180_INTER_TURN_REST_MS = 300UL;
+constexpr uint32_t NAV_180_FINAL_SNAP_REST_MS = 150UL;
 
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.
 constexpr uint32_t NAV_STARTUP_STABILIZE_MS = 4000UL;

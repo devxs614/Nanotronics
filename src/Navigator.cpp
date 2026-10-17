@@ -323,7 +323,12 @@ Navigator::Navigator()
       turnSlowed_(false),
       turnBraking_(false),
       turnSettling_(false),
-      turnResting_(false) {
+      turnResting_(false),
+      turn180Sequence_(false),
+      turn180SecondTurn_(false),
+      turn180InterRest_(false),
+      turn180FinalRest_(false),
+      turn180PauseStartedMs_(0) {
   memset(&redProfile, 0, sizeof(redProfile));
   strcpy(currentColorName, "Desc");
 }
@@ -337,6 +342,10 @@ void Navigator::begin() {
   turnBraking_ = false;
   turnSettling_ = false;
   turnResting_ = false;
+  turn180Sequence_ = false;
+  turn180SecondTurn_ = false;
+  turn180InterRest_ = false;
+  turn180FinalRest_ = false;
 
   // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
   // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
@@ -431,7 +440,13 @@ void Navigator::calibrateGyroBias() {
 }
 
 void Navigator::startTurn180() {
-  turn90(false, 180.0f);
+  // Dos giros izquierdos de 90° permiten frenar, reencuadrar el yaw y leer
+  // ToF a mitad de maniobra, en lugar de mantener un giro ciego de 180°.
+  turn180Sequence_ = true;
+  turn180SecondTurn_ = false;
+  turn180InterRest_ = false;
+  turn180FinalRest_ = false;
+  turn90(true, 90.0f);
 }
 
 void Navigator::turn90(bool turnLeft, float targetDegrees) {
@@ -443,6 +458,10 @@ void Navigator::turn90(bool turnLeft, float targetDegrees) {
     int16_t ax, ay, az, gx, gy, gz;
     if (!readImuRaw(ax, ay, az, gx, gy, gz)) {
       turnActive_ = false;
+      turn180Sequence_ = false;
+      turn180SecondTurn_ = false;
+      turn180InterRest_ = false;
+      turn180FinalRest_ = false;
       Serial.println(F("[GIRO] IMU no recuperada"));
       return;
     }
@@ -487,7 +506,13 @@ void Navigator::beginTurnBrake() {
 }
 
 Navigator::TurnResult Navigator::updateTurn() {
-  if (!turnActive_) return TurnResult::FAILED;
+  if (!turnActive_) {
+    turn180Sequence_ = false;
+    turn180SecondTurn_ = false;
+    turn180InterRest_ = false;
+    turn180FinalRest_ = false;
+    return TurnResult::FAILED;
+  }
 
   if (turnBraking_) {
     motorController.update();
@@ -502,9 +527,65 @@ Navigator::TurnResult Navigator::updateTurn() {
   if (turnSettling_) {
     if (millis() - settleStartedMs_ < TURN_SETTLE_MS) return TurnResult::IN_PROGRESS;
     turnSettling_ = false;
-    // El micro-freno ya termino: fija la orientacion en el eje ortogonal antes
-    // de iniciar la pausa estatica de tres segundos.
+    // Cada tramo de 90° termina con referencia ortogonal y, si existe una
+    // pared medible al frente, con su ajuste longitudinal por ToF.
     snapYawToNearest90();
+    alignWithFrontWall();
+
+    if (turn180Sequence_ && !turn180SecondTurn_) {
+      // Tras el primer cuarto de vuelta, toma muestras ToF inmovil durante
+      // 300 ms antes de iniciar el segundo giro independiente de 90°.
+      turn180InterRest_ = true;
+      turn180PauseStartedMs_ = millis();
+      lastRestTelemetryMs_ = 0;
+      return TurnResult::IN_PROGRESS;
+    }
+    if (turn180Sequence_ && turn180SecondTurn_) {
+      // El segundo tramo ya termino: conserva 150 ms de reposo antes del
+      // snap final y de la pausa normal de celda.
+      turn180FinalRest_ = true;
+      turn180PauseStartedMs_ = millis();
+      lastRestTelemetryMs_ = 0;
+      return TurnResult::IN_PROGRESS;
+    }
+
+    turnResting_ = true;
+    restStartedMs_ = millis();
+    lastRestTelemetryMs_ = 0;
+    return TurnResult::IN_PROGRESS;
+  }
+
+  if (turn180InterRest_) {
+    if (lastRestTelemetryMs_ == 0 ||
+        millis() - lastRestTelemetryMs_ >= NAV_REST_TELEMETRY_MS) {
+      refreshStationaryTelemetry();
+      lastRestTelemetryMs_ = millis();
+    }
+    if (millis() - turn180PauseStartedMs_ < NAV_180_INTER_TURN_REST_MS) {
+      return TurnResult::IN_PROGRESS;
+    }
+
+    turn180InterRest_ = false;
+    turn180SecondTurn_ = true;
+    turn90(true, 90.0f);
+    return TurnResult::IN_PROGRESS;
+  }
+
+  if (turn180FinalRest_) {
+    if (lastRestTelemetryMs_ == 0 ||
+        millis() - lastRestTelemetryMs_ >= NAV_REST_TELEMETRY_MS) {
+      refreshStationaryTelemetry();
+      lastRestTelemetryMs_ = millis();
+    }
+    if (millis() - turn180PauseStartedMs_ < NAV_180_FINAL_SNAP_REST_MS) {
+      return TurnResult::IN_PROGRESS;
+    }
+
+    // El snap tras los 150 ms absorbe cualquier relajacion mecanica final.
+    snapYawToNearest90();
+    turn180FinalRest_ = false;
+    turn180Sequence_ = false;
+    turn180SecondTurn_ = false;
     turnResting_ = true;
     restStartedMs_ = millis();
     lastRestTelemetryMs_ = 0;
@@ -520,6 +601,10 @@ Navigator::TurnResult Navigator::updateTurn() {
     if (millis() - restStartedMs_ < NAV_CELL_REST_MS) return TurnResult::IN_PROGRESS;
     turnResting_ = false;
     turnActive_ = false;
+    turn180Sequence_ = false;
+    turn180SecondTurn_ = false;
+    turn180InterRest_ = false;
+    turn180FinalRest_ = false;
     lastImuUs = micros();
     Serial.print(F("[GIRO] Completado: "));
     Serial.print(turnedAngle_, 1);
@@ -530,6 +615,10 @@ Navigator::TurnResult Navigator::updateTurn() {
   if (millis() - turnStartedMs_ >= TURN_TIMEOUT_MS) {
     motorController.stop();
     turnActive_ = false;
+    turn180Sequence_ = false;
+    turn180SecondTurn_ = false;
+    turn180InterRest_ = false;
+    turn180FinalRest_ = false;
     resetMuxChannel(MUX_CH_IMU);
     Serial.println(F("[GIRO] Timeout recuperando"));
     return TurnResult::FAILED;
@@ -542,6 +631,10 @@ Navigator::TurnResult Navigator::updateTurn() {
     int16_t ax, ay, az, gx, gy, gz;
     if (!readImuRaw(ax, ay, az, gx, gy, gz)) {
       turnActive_ = false;
+      turn180Sequence_ = false;
+      turn180SecondTurn_ = false;
+      turn180InterRest_ = false;
+      turn180FinalRest_ = false;
       Serial.println(F("[GIRO] IMU no recuperada"));
       return TurnResult::FAILED;
     }
@@ -569,6 +662,10 @@ Navigator::TurnResult Navigator::updateTurn() {
     imuRead = readImuRaw(ax, ay, az, gx, gy, gz);
     if (!imuRead) {
       turnActive_ = false;
+      turn180Sequence_ = false;
+      turn180SecondTurn_ = false;
+      turn180InterRest_ = false;
+      turn180FinalRest_ = false;
       Serial.println(F("[GIRO] I2C IMU no recuperado"));
       return TurnResult::FAILED;
     }
