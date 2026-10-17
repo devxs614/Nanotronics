@@ -202,6 +202,8 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
   targetYaw = yawDeg;  // Rumbo objetivo = rumbo al iniciar
   encoderManager.resetTicks();
   odometryMm = 0.0f;
+  float lastProgressMm = odometryMm;
+  uint32_t lastProgressMs = millis();
   float lastYawError = 0.0f;
   uint32_t lastControlUs = micros();
   const float decelStartMm = targetDistanceMm - 50.0f;
@@ -242,6 +244,16 @@ bool advanceOneCell(float targetDistanceMm = CELL_MM) {
     odometryMm = readOdometryMm();
 
     if (odometryMm >= targetDistanceMm) break;
+    if (odometryMm - lastProgressMm >= NAV_STUCK_MIN_PROGRESS_MM) {
+      lastProgressMm = odometryMm;
+      lastProgressMs = now;
+    } else if (now - lastProgressMs > NAV_STUCK_PROGRESS_TIMEOUT_MS) {
+      reason = F("ATASCADO");
+      completed = false;
+      activeBrake = false;
+      navigator.triggerStuckRecovery();
+      break;
+    }
     if (dF > 0 && dF <= NAV_STOP_FRONT_MM) {
       reason = F("Pared frontal");
       break;
@@ -379,6 +391,9 @@ void Navigator::begin() {
   foundPink = false;
   foundOrange = false;
   foundRed = false;
+  consecutiveSameTurnCount = 0;
+  lastTurnDirection = 0;
+  tempLeftWallOverrideSteps = 0;
   currentTrackColor_ = COLOR_FLOOR;
   strcpy(currentColorName, "Piso");
 
@@ -778,6 +793,29 @@ void Navigator::alignWithFrontWall() {
   delay(NAV_FRONT_ALIGN_SETTLE_MS);
 }
 
+void Navigator::triggerStuckRecovery() {
+  motorController.stop();
+  motorController.update();
+  Serial.println(F("[ATASCO] Sin avance; micro-reversa de 50 mm"));
+
+  // readOdometryMm() mide la magnitud de los ticks; por ello la diferencia
+  // acumulada durante la marcha atras representa correctamente los 50 mm.
+  const float startedMm = readOdometryMm();
+  const uint32_t startedMs = millis();
+  motorController.setSpeeds(-NAV_STUCK_REVERSE_PWM, -NAV_STUCK_REVERSE_PWM,
+                            -NAV_STUCK_REVERSE_PWM, -NAV_STUCK_REVERSE_PWM);
+  while (readOdometryMm() - startedMm < NAV_STUCK_REVERSE_MM &&
+         millis() - startedMs < NAV_STUCK_REVERSE_TIMEOUT_MS) {
+    motorController.update();
+    yield();
+  }
+
+  motorController.stop();
+  motorController.update();
+  snapYawToNearest90();
+  delay(NAV_STUCK_SETTLE_MS);
+}
+
 // Mantiene datos frescos mientras el robot espera inmovil entre casillas.
 // No reinicializa sensores ni reutiliza mediciones anteriores.
 void Navigator::refreshStationaryTelemetry() {
@@ -933,10 +971,54 @@ Orientation Navigator::getHeading() const {
 }
 
 Move Navigator::decideRightWallRule() {
-  if (freeR) return TURN_RIGHT;
-  if (freeF) return FORWARD;
-  if (freeL) return TURN_LEFT;
-  return TURN_180;
+  if (tempLeftWallOverrideSteps > 0) {
+    --tempLeftWallOverrideSteps;
+    Serial.print(F("[ANTI-LOOP] Ejecutando regla invertida (Pasos restantes: "));
+    Serial.print(tempLeftWallOverrideSteps);
+    Serial.println(F(")"));
+
+    // Durante el escape se descarta el historial previo: estos tres pasos se
+    // ejecutan deliberadamente con la prioridad opuesta a la pared derecha.
+    consecutiveSameTurnCount = 0;
+    lastTurnDirection = 0;
+    if (freeL) return TURN_LEFT;
+    if (freeF) return FORWARD;
+    if (freeR) return TURN_RIGHT;
+    return TURN_180;
+  }
+
+  Move selectedMove = TURN_180;
+  if (freeR) selectedMove = TURN_RIGHT;
+  else if (freeF) selectedMove = FORWARD;
+  else if (freeL) selectedMove = TURN_LEFT;
+
+  if (selectedMove != TURN_LEFT && selectedMove != TURN_RIGHT) {
+    consecutiveSameTurnCount = 0;
+    lastTurnDirection = 0;
+    return selectedMove;
+  }
+
+  const uint8_t selectedDirection = selectedMove == TURN_LEFT ? 1 : 2;
+  if (lastTurnDirection == selectedDirection) {
+    ++consecutiveSameTurnCount;
+  } else {
+    consecutiveSameTurnCount = 1;
+    lastTurnDirection = selectedDirection;
+  }
+
+  if (selectedMove == TURN_RIGHT &&
+      consecutiveSameTurnCount >= NAV_ANTI_LOOP_TURN_LIMIT) {
+    tempLeftWallOverrideSteps = NAV_ANTI_LOOP_OVERRIDE_STEPS;
+    consecutiveSameTurnCount = 0;
+    lastTurnDirection = 0;
+    Serial.println(F("[ANTI-LOOP] 4 giros a la derecha; activando regla invertida."));
+
+    // Si existe una salida frontal, se usa de inmediato para romper el arco
+    // circular; los tres pasos siguientes conservaran el override izquierdo.
+    if (freeF) return FORWARD;
+  }
+
+  return selectedMove;
 }
 
 void Navigator::update() {

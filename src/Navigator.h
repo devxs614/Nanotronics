@@ -77,6 +77,11 @@ class Navigator {
   bool foundOrange = false;
   bool foundRed = false;
 
+  // Heuristico de escape de circulos de navegacion.
+  uint8_t consecutiveSameTurnCount = 0;
+  uint8_t lastTurnDirection = 0;  // 1: izquierda, 2: derecha, 0: ninguno
+  uint8_t tempLeftWallOverrideSteps = 0;
+
   // Estado del giro no bloqueante, integrado directamente desde el gyro Z.
   float gyroBiasZ_;
   float turnedAngle_;
@@ -120,6 +125,7 @@ class Navigator {
   Orientation getHeading() const;
   void snapYawToNearest90();   // Corrige la deriva acumulada entre movimientos
   void alignWithFrontWall();   // Centrado longitudinal opcional contra pared frontal
+  void triggerStuckRecovery(); // Micro-reversa segura y regreso a SCAN
   void restWithTelemetry(uint32_t durationMs);
 };
 

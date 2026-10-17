@@ -69,6 +69,17 @@ constexpr uint32_t NAV_FRONT_ALIGN_SETTLE_MS = 50UL;
 constexpr uint32_t NAV_180_INTER_TURN_REST_MS = 300UL;
 constexpr uint32_t NAV_180_FINAL_SNAP_REST_MS = 150UL;
 
+// Heuristicas de recuperacion: evitan repetir la misma decision o mantener
+// motores activos cuando la odometria no demuestra avance fisico.
+constexpr uint8_t NAV_ANTI_LOOP_TURN_LIMIT = 4;
+constexpr uint8_t NAV_ANTI_LOOP_OVERRIDE_STEPS = 3;
+constexpr float NAV_STUCK_MIN_PROGRESS_MM = 20.0f;
+constexpr uint32_t NAV_STUCK_PROGRESS_TIMEOUT_MS = 1200UL;
+constexpr float NAV_STUCK_REVERSE_MM = 50.0f;
+constexpr int16_t NAV_STUCK_REVERSE_PWM = 80;
+constexpr uint32_t NAV_STUCK_REVERSE_TIMEOUT_MS = 1500UL;
+constexpr uint32_t NAV_STUCK_SETTLE_MS = 200UL;
+
 // Tiempos de navegacion: el reposo por casilla mantiene la telemetria activa.
 constexpr uint32_t NAV_STARTUP_STABILIZE_MS = 4000UL;
 constexpr uint32_t NAV_STARTUP_SPLASH_MS = 1500UL;
