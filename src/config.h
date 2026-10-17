@@ -44,17 +44,6 @@ enum TrackMode : uint8_t {
   TRACK_MODE_B
 };
 
-// Estados de la Seccion 1 de Pista B. SEC2_TRANSITION marca el relevo al
-// siguiente modulo sin afectar la maquina de estados existente de Pista A.
-enum TrackBSection : uint8_t {
-  SEC1_SEARCH_BALL,
-  SEC1_GRAB_BALL,
-  SEC1_NAVIGATE_CHECKPOINT,
-  SEC2_TRANSITION,
-  SEC2_GREEN_GRID,
-  SEC3_COLOR_PATH
-};
-
 #ifndef ACTIVE_TRACK_MODE
 #define ACTIVE_TRACK_MODE TRACK_MODE_B
 #endif
@@ -344,15 +333,6 @@ constexpr uint8_t VL53_LEFT_ADDRESS = 0x32;
 #define GRIPPER_SERVO_PIN 5
 #define QTR_SENSOR_PIN_BASE A0
 
-// El pin 9 es MOTOR4_PWM_PIN; usarlo para el servo cortocircuitaria el control
-// de la rueda trasera derecha. La garra ya esta cableada y gestionada en el pin
-// 5 mediante GripperController, por lo que este es el pin seguro del servo.
-constexpr uint8_t SERVO_PIN = GRIPPER_SERVO_PIN;
-constexpr uint8_t SERVO_UP_ANGLE = 90;
-constexpr uint8_t SERVO_DOWN_ANGLE = 0;
-constexpr uint16_t SERVO_ACTION_DELAY_MS = 500;
-static_assert(SERVO_PIN != MOTOR4_PWM_PIN, "El servo no puede compartir PWM con M4");
-
 // QTR-8A de la Pista B. Estos pines coinciden con la configuracion de
 // LineSensor y se dejan declarados aqui como mapa de hardware unico.
 // Seccion 2: QTR-8A sobre piso verde. Blanco corresponde a la linea de 2 cm.
@@ -367,7 +347,6 @@ constexpr int16_t TRACK_B_SECTION2_PWM = NAV_STRAIGHT_BASE_PWM;
 constexpr int16_t TRACK_B_QTR_STRAFE_PWM = 60;
 constexpr uint32_t TRACK_B_QTR_STRAFE_MS = 100UL;
 constexpr uint8_t TRACK_B_QTR_MAX_AVOID_ATTEMPTS = 4;
-constexpr uint16_t TRACK_B_SCORE_BALL_EXIT = 15;
 constexpr uint16_t TRACK_B_SCORE_CHECKPOINT = 70;
 constexpr uint16_t TRACK_B_SCORE_FINAL_BONUS = 85;
 

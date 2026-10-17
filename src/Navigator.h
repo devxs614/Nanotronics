@@ -46,7 +46,6 @@ class Navigator {
   enum class TurnResult : uint8_t { IN_PROGRESS, COMPLETED, FAILED };
   enum class TrackBState : uint8_t {
     SECTION1_EXPLORE,
-    SECTION1_GRAB,
     TURNING,
     SECTION1_ADVANCE,
     SECTION2_ENTER,
@@ -64,10 +63,6 @@ class Navigator {
   TrackBState trackBState_ = TrackBState::SECTION1_EXPLORE;
   TrackBState trackBAfterTurn_ = TrackBState::SECTION1_EXPLORE;
   Move trackBMove_ = FORWARD;
-  bool hasBall = false;
-  TrackBSection sec1State = SEC1_SEARCH_BALL;
-  bool trackBLeavingContainer_ = false;
-  bool startupModeDisplay_ = true;
   uint16_t trackBScore_ = 0;
   uint16_t qtrPeak_ = 0;
   uint32_t trackBLastScanMs_ = 0;
@@ -91,11 +86,6 @@ class Navigator {
   bool foundPink = false;
   bool foundOrange = false;
   bool foundRed = false;
-
-  // Detector de repeticion de acciones: 1=frente, 2=derecha, 3=izquierda.
-  uint8_t sameActionCount = 0;
-  uint8_t lastAction = 0;
-  bool forceAlternativeTurn = false;
 
   // Estado del giro no bloqueante, integrado directamente desde el gyro Z.
   float gyroBiasZ_;
@@ -131,7 +121,6 @@ class Navigator {
   void updateTrackB();
   void startTrackBTurn(Move move, TrackBState nextState);
   void updateTrackBTurn();
-  void captureTrackBBall();
   bool advanceTrackBSection2();
   bool isTrackBWhiteLine();
   void avoidTrackBWhiteLine();
@@ -146,7 +135,7 @@ class Navigator {
   bool isRunning() const;
   bool isGoalColorDetected();  // true solo con Rojo y checklist completo
   bool allRequiredColorsFound() const;
-  void renderOled();           // OLED (canal 5): YAW|Color, F/L/R, paredes, ODO
+  void renderOled();           // OLED (canal 5): solo color clasificado centrado
   Orientation getHeading() const;
   void snapYawToNearest90();   // Corrige la deriva acumulada entre movimientos
   void alignWithFrontWall();   // Centrado longitudinal opcional contra pared frontal
