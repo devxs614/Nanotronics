@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <EEPROM.h>
+#include "config.h"
 
 // Formato que guarda tests_2.0/09_test_color_calibration_eeprom.cpp en la EEPROM (direccion 0):
 // codigo magic + una firma por color (Cian, Amarillo, Naranja, Rosa, Rojo, Verde, Piso).
@@ -32,20 +33,19 @@ struct ColorProfile {
 
 // Tabla 4D: RGB normalizado (r/(r+g+b), ...) + intensidad normC = C/50
 struct ColorRef4D {
+  TrackColor color;
   const char* name;
   float normR, normG, normB, normC;
-  bool isGoal;
 };
 
 const ColorRef4D COLOR_TABLE_4D[] = {
-  {"Cian",       0.312f, 0.375f, 0.312f, 0.240f, false},  // C:12
-  {"Amarillo",   0.458f, 0.333f, 0.208f, 0.400f, false},  // C:20
-  {"Naranja",    0.579f, 0.263f, 0.158f, 0.300f, false},  // C:15
-  {"Rosa",       0.636f, 0.182f, 0.182f, 0.620f, false},  // C:31
-  {"Rojo",       0.640f, 0.200f, 0.160f, 0.400f, true },  // C:20 (META)
-  {"Verde",      0.364f, 0.364f, 0.273f, 0.160f, false},  // C:8
-  {"Piso",       0.447f, 0.340f, 0.213f, 0.880f, false},  // C:44
-  {"Verde Lima", 0.421f, 0.368f, 0.211f, 0.320f, false}   // C:16
+  {COLOR_CYAN,   "Cyan",     0.312f, 0.375f, 0.312f, 0.240f},  // C:12
+  {COLOR_GREEN,  "Verde",    0.364f, 0.364f, 0.273f, 0.160f},  // C:8
+  {COLOR_YELLOW, "Amarillo", 0.458f, 0.333f, 0.208f, 0.400f},  // C:20
+  {COLOR_PINK,   "Rosa",     0.636f, 0.182f, 0.182f, 0.620f},  // C:31
+  {COLOR_ORANGE, "Naranja",  0.579f, 0.263f, 0.158f, 0.300f},  // C:15
+  {COLOR_RED,    "Rojo",     0.640f, 0.200f, 0.160f, 0.400f},  // C:20 (META)
+  {COLOR_FLOOR,  "Piso",     0.447f, 0.340f, 0.213f, 0.880f}   // C:44
 };
 constexpr uint8_t COLOR_TABLE_4D_SIZE = sizeof(COLOR_TABLE_4D) / sizeof(COLOR_TABLE_4D[0]);
 constexpr float COLOR_MAX_DISTANCE_4D = 0.25f;
@@ -67,6 +67,15 @@ class Navigator {
 
   ColorProfile redProfile;  // Color de meta cargado de la EEPROM
   char currentColorName[12];  // Ultimo color clasificado (Rojo, Cian, ..., Desc)
+  TrackColor currentTrackColor_;
+
+  // Checklist persistente durante la navegacion actual. Piso no participa.
+  bool foundCyan = false;
+  bool foundGreen = false;
+  bool foundYellow = false;
+  bool foundPink = false;
+  bool foundOrange = false;
+  bool foundRed = false;
 
   // Estado del giro no bloqueante, integrado directamente desde el gyro Z.
   float gyroBiasZ_;
@@ -91,7 +100,7 @@ class Navigator {
   uint32_t turn180PauseStartedMs_;
 
   Move decideRightWallRule();
-  String readDetectedColor(bool& outIsGoal);  // Canal 1: vecino mas cercano sobre COLOR_TABLE
+  TrackColor readDetectedColor();  // Canal 1: vecino mas cercano 4D sobre COLOR_TABLE
   void calibrateGyroBias();
   void turn90(bool turnLeft, float targetDegrees = 90.0f);
   void startTurn180();
@@ -105,7 +114,8 @@ class Navigator {
   void start();                // Compatibilidad Serial; la FSM ya inicia automaticamente
   void update();               // Ejecuta el ciclo activo de la FSM en loop()
   bool isRunning() const;
-  bool isGoalColorDetected();  // true si el TCS34725 (canal 1) clasifica como Rojo
+  bool isGoalColorDetected();  // true solo con Rojo y checklist completo
+  bool allRequiredColorsFound() const;
   void renderOled();           // OLED (canal 5): YAW|Color, F/L/R, paredes, ODO
   Orientation getHeading() const;
   void snapYawToNearest90();   // Corrige la deriva acumulada entre movimientos

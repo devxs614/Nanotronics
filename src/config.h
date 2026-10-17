@@ -223,6 +223,19 @@ constexpr float TICKS_PER_MM = 2.6442f;
 #define OLED_ADDRESS 0x3C
 
 constexpr uint8_t TCS34725_I2C_ADDRESS = 0x29;
+
+// Colores de pista reconocidos por la clasificacion 4D del TCS34725.
+// Piso es neutro: se muestra, pero no modifica el checklist obligatorio.
+enum TrackColor : uint8_t {
+  COLOR_FLOOR,
+  COLOR_CYAN,
+  COLOR_GREEN,
+  COLOR_YELLOW,
+  COLOR_PINK,
+  COLOR_ORANGE,
+  COLOR_RED
+};
+
 constexpr uint8_t MPU6050_I2C_ADDRESS = 0x68;
 constexpr uint8_t VL53_FRONT_ADDRESS = 0x30;
 constexpr uint8_t VL53_RIGHT_ADDRESS = 0x31;

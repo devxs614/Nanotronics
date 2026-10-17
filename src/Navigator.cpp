@@ -65,6 +65,32 @@ struct CellStatus {
   bool freeRight;
 };
 
+const char* trackColorName(TrackColor colorId) {
+  switch (colorId) {
+    case COLOR_CYAN: return "Cyan";
+    case COLOR_GREEN: return "Verde";
+    case COLOR_YELLOW: return "Amarillo";
+    case COLOR_PINK: return "Rosa";
+    case COLOR_ORANGE: return "Naranja";
+    case COLOR_RED: return "Rojo";
+    case COLOR_FLOOR:
+    default: return "Piso";
+  }
+}
+
+const char* trackColorShortName(TrackColor colorId) {
+  switch (colorId) {
+    case COLOR_CYAN: return "CYN";
+    case COLOR_GREEN: return "VRD";
+    case COLOR_YELLOW: return "AMA";
+    case COLOR_PINK: return "ROS";
+    case COLOR_ORANGE: return "NAR";
+    case COLOR_RED: return "ROJ";
+    case COLOR_FLOOR:
+    default: return "PIS";
+  }
+}
+
 uint16_t scanDistF = 0;
 uint16_t scanDistL = 0;
 uint16_t scanDistR = 0;
@@ -309,6 +335,7 @@ Navigator::Navigator()
       freeF(true),
       freeL(true),
       freeR(true),
+      currentTrackColor_(COLOR_FLOOR),
       gyroBiasZ_(0.0f),
       turnedAngle_(0.0f),
       turnTargetDegrees_(0.0f),
@@ -330,7 +357,7 @@ Navigator::Navigator()
       turn180FinalRest_(false),
       turn180PauseStartedMs_(0) {
   memset(&redProfile, 0, sizeof(redProfile));
-  strcpy(currentColorName, "Desc");
+  strcpy(currentColorName, "Piso");
 }
 
 void Navigator::begin() {
@@ -346,6 +373,14 @@ void Navigator::begin() {
   turn180SecondTurn_ = false;
   turn180InterRest_ = false;
   turn180FinalRest_ = false;
+  foundCyan = false;
+  foundGreen = false;
+  foundYellow = false;
+  foundPink = false;
+  foundOrange = false;
+  foundRed = false;
+  currentTrackColor_ = COLOR_FLOOR;
+  strcpy(currentColorName, "Piso");
 
   // Los ToF se inicializan aqui, una sola vez, antes de la primera lectura de
   // SCAN. readDistanceSensor() nunca ejecuta begin()/init().
@@ -781,10 +816,9 @@ void Navigator::restWithTelemetry(uint32_t durationMs) {
   motorController.stop();
 }
 
-// Vecino mas cercano 4D: evalua los 8 colores de COLOR_TABLE_4D (RGB normalizado + C/50)
-// y elige la menor distancia euclidiana (aceptada si < 0.25); si no, "Desc".
-String Navigator::readDetectedColor(bool& outIsGoal) {
-  outIsGoal = false;
+// Vecino mas cercano 4D de los seis colores de pista y el piso neutro.
+// Una muestra oscura/no clasificable se trata como Piso y no altera checklist.
+TrackColor Navigator::readDetectedColor() {
   selectI2CChannel(MUX_CH_COLOR);
   delay(2);
   color.readRaw();
@@ -793,10 +827,10 @@ String Navigator::readDetectedColor(bool& outIsGoal) {
   const uint16_t rawB = color.latestReading.b;
   const uint16_t rawC = color.latestReading.c;
 
-  if (rawC < 5) return String("Oscuro");
+  if (rawC < 5) return COLOR_FLOOR;
 
   const float sum = static_cast<float>(rawR) + rawG + rawB;
-  if (sum <= 0.0f) return String("Desc");
+  if (sum <= 0.0f) return COLOR_FLOOR;
   const float nr = rawR / sum;
   const float ng = rawG / sum;
   const float nb = rawB / sum;
@@ -817,24 +851,40 @@ String Navigator::readDetectedColor(bool& outIsGoal) {
   }
 
   if (bestIndex != -1 && minDistance < COLOR_MAX_DISTANCE_4D) {
-    outIsGoal = COLOR_TABLE_4D[bestIndex].isGoal;
-    return String(COLOR_TABLE_4D[bestIndex].name);
+    return COLOR_TABLE_4D[bestIndex].color;
   }
-  return String("Desc");
+  return COLOR_FLOOR;
 }
 
 bool Navigator::isGoalColorDetected() {
-  bool isGoal = false;
-  const String name = readDetectedColor(isGoal);
-  strncpy(currentColorName, name.c_str(), sizeof(currentColorName) - 1);
+  currentTrackColor_ = readDetectedColor();
+  strncpy(currentColorName, trackColorName(currentTrackColor_), sizeof(currentColorName) - 1);
   currentColorName[sizeof(currentColorName) - 1] = '\0';
-  if (isGoal) {
-    Serial.print(F("[NAV] META ROJA detectada | R:")); Serial.print(color.latestReading.r);
-    Serial.print(F(" G:")); Serial.print(color.latestReading.g);
-    Serial.print(F(" B:")); Serial.print(color.latestReading.b);
-    Serial.print(F(" C:")); Serial.println(color.latestReading.c);
+
+  switch (currentTrackColor_) {
+    case COLOR_CYAN: foundCyan = true; break;
+    case COLOR_GREEN: foundGreen = true; break;
+    case COLOR_YELLOW: foundYellow = true; break;
+    case COLOR_PINK: foundPink = true; break;
+    case COLOR_ORANGE: foundOrange = true; break;
+    case COLOR_RED:
+      foundRed = true;
+      if (allRequiredColorsFound()) {
+        Serial.println(F("[META] Pista completada: colores requeridos + ROJO."));
+        return true;
+      }
+      Serial.println(F("[COLOR] ROJO detectado; faltan colores. Navegacion continua."));
+      break;
+    case COLOR_FLOOR:
+    default:
+      // Piso se muestra en OLED, pero es neutro para el checklist.
+      break;
   }
-  return isGoal;
+  return false;
+}
+
+bool Navigator::allRequiredColorsFound() const {
+  return foundCyan && foundGreen && foundYellow && foundPink && foundOrange;
 }
 
 // OLED (canal 5), 4 filas: "YAW:-152 | Desc", "F:0 L:249 R:0", "F:L L:L R:L", "ODO: 1 mm"
@@ -846,7 +896,12 @@ void Navigator::renderOled() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  snprintf(line, sizeof(line), "YAW:%d | %.4s", static_cast<int>(yawDeg), currentColorName);
+  // CVARN muestra el checklist: mayuscula=encontrado, minuscula=pendiente.
+  char checklist[6] = {
+      foundCyan ? 'C' : 'c', foundGreen ? 'V' : 'v', foundYellow ? 'A' : 'a',
+      foundPink ? 'R' : 'r', foundOrange ? 'N' : 'n', '\0'};
+  snprintf(line, sizeof(line), "YAW:%d | %s %s", static_cast<int>(yawDeg),
+           trackColorShortName(currentTrackColor_), checklist);
   display.setCursor(0, 0);
   display.print(line);
 
