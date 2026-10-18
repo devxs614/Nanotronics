@@ -10,11 +10,7 @@
             "includePath": [
                 "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/CalibrationManager",
                 "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/SensorFusion",
-                "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/VisionInterface",
-                "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/Diagnostics",
                 "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/RobotStateMachine",
-                "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/RecoveryManager",
-                "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/TileNavigator",
                 "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/LineAvoidanceController",
                 "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/BallHandler",
                 "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/MazeNavigator",
@@ -56,11 +52,7 @@
                 "path": [
                     "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/CalibrationManager",
                     "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/SensorFusion",
-                    "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/VisionInterface",
-                    "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/Diagnostics",
                     "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/RobotStateMachine",
-                    "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/RecoveryManager",
-                    "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/TileNavigator",
                     "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/LineAvoidanceController",
                     "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/BallHandler",
                     "C:/Users/dabar/.copilot/chats/2026-09-14/super-barnacle-ca08f3a3/roborregos_candidates_2026/lib/MazeNavigator",
